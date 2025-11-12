@@ -19,6 +19,7 @@ from . import sos_filter
 from .interfaces import LoadCellSensor
 from .tap_analysis import TapAnalysisHelper, TapClassifierModule, TapAnalysis
 from .load_cell import LoadCell, LoadCellSampleCollector
+from .tap_quality_classifier import TapQualityClassifier
 import numpy as np
 
 
@@ -1231,6 +1232,7 @@ class PullbackDistanceCalibration:
             "with the above and restart the printer."
         )
 
+
 class LoadCellPrinterProbe:
     def __init__(
         self,
@@ -1241,6 +1243,7 @@ class LoadCellPrinterProbe:
         self._config = config
         self._printer = config.get_printer()
         self._load_cell = LoadCell(config, sensor)
+        self._tap_classifier = tap_classifier
         # Read all user configuration and build modules
         name = config.get_name()
         self._tap_analysis_helper = TapAnalysisHelper(
@@ -1288,9 +1291,7 @@ class LoadCellPrinterProbe:
             self._load_cell,
         )
         self._pullback_distance_calibration = PullbackDistanceCalibration(
-            config,
-            self._config_helper,
-            self._tap_analysis_helper.add_callback
+            config, self._config_helper, self._tap_analysis_helper.add_callback
         )
         self._register_macros()
 
@@ -1310,6 +1311,15 @@ class LoadCellPrinterProbe:
             self._drift_filter_calibration.calibrate(gcmd)
         elif calibration == "PULLBACK_DISTANCE":
             self._pullback_distance_calibration.calibrate(gcmd)
+        elif calibration == "DECOMPRESSION_ANGLE" and isinstance(
+            self._tap_classifier, TapQualityClassifier
+        ):
+            self._tap_classifier.calibrate(gcmd)
+        elif not calibration:
+            gcmd.error(
+                "CALIBRATION must be one of DRIFT_FILTER, "
+                "PULLBACK_DISTANCE or DECOMPRESSION_ANGLE"
+            )
         else:
             gcmd.error(f"Unknown CALIBRATION value '{calibration}'")
 
