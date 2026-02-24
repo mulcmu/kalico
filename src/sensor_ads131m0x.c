@@ -1,4 +1,4 @@
-// Support for ADS131M02 ADC Chip
+// Support for ADS131M0X ADC Chip
 //
 // Copyright (C) 2025
 //
@@ -15,14 +15,14 @@
 #include "spicmds.h" // spidev_transfer
 #include <stdint.h>
 
-struct ads131m02_adc {
+struct ads131m0x_adc {
     struct timer timer;
     uint32_t rest_ticks;
     uint32_t last_error;
     struct gpio_in data_ready;
     struct spidev_s *spi;
     uint8_t pending_flag;
-    uint8_t channel_offset; // 3 or 6
+    uint8_t total_channels;
     struct sensor_bulk sb;
     struct load_cell_probe *lce;
 };
@@ -36,10 +36,10 @@ struct ads131m02_adc {
 #define CRC_INITIAL 0xFFFF
 #define CRC_POLY 0x1021  // CCITT polynomial: x^16 + x^12 + x^5 + 1
 
-static struct task_wake wake_ads131m02;
+static struct task_wake wake_ads131m0x;
 
 /****************************************************************
- * ADS131M02 Sensor Support
+ * ADS131M0X Sensor Support
  ****************************************************************/
 
 // Calculate CCITT CRC-16 over data bytes
@@ -60,23 +60,23 @@ calc_crc16(uint8_t *data, uint8_t len)
 }
 
 static inline uint8_t
-ads131m02_is_data_ready(struct ads131m02_adc *adc) {
+ads131m0x_is_data_ready(struct ads131m0x_adc *adc) {
     return gpio_in_read(adc->data_ready) == 0;
 }
 
-// Event handler that wakes wake_ads131m02() periodically
+// Event handler that wakes wake_ads131m0x() periodically
 static uint_fast8_t
-ads131m02_event(struct timer *timer)
+ads131m0x_event(struct timer *timer)
 {
-    struct ads131m02_adc *adc = container_of(timer, struct ads131m02_adc,
+    struct ads131m0x_adc *adc = container_of(timer, struct ads131m0x_adc,
                                               timer);
     uint32_t rest_ticks = adc->rest_ticks;
     if (adc->pending_flag) {
         adc->sb.possible_overflows++;
         rest_ticks *= 4;
-    } else if (ads131m02_is_data_ready(adc)) {
+    } else if (ads131m0x_is_data_ready(adc)) {
         adc->pending_flag = 1;
-        sched_wake_task(&wake_ads131m02);
+        sched_wake_task(&wake_ads131m0x);
         rest_ticks *= 8;
     }
     adc->timer.waketime += rest_ticks;
@@ -85,7 +85,7 @@ ads131m02_event(struct timer *timer)
 
 // Add a measurement to the buffer
 static void
-add_sample(struct ads131m02_adc *adc, uint8_t oid, uint_fast32_t counts)
+add_sample(struct ads131m0x_adc *adc, uint8_t oid, uint_fast32_t counts)
 {
     adc->sb.data[adc->sb.data_count] = counts;
     adc->sb.data[adc->sb.data_count + 1] = counts >> 8;
@@ -98,15 +98,19 @@ add_sample(struct ads131m02_adc *adc, uint8_t oid, uint_fast32_t counts)
     }
 }
 
-// ADS131M02 ADC query
+// ADS131M0X ADC query
 static void
-ads131m02_read_adc(struct ads131m02_adc *adc, uint8_t oid)
+ads131m0x_read_adc(struct ads131m0x_adc *adc, uint8_t oid)
 {
     // Typical communication frame at 24-bit word length:
-    // 3-byte STATUS + 3-byte CH0 + 3-byte CH1 + 3-byte CRC.
+    // 3-byte STATUS + 3-byte CHx per channel + 3-byte CRC.
+    // Disabled channels return 0x000000
     // Clock out with NULL command bytes on DIN.
-    uint8_t rx[12] = {0};
-    spidev_transfer(adc->spi, 1, sizeof(rx), rx);
+    uint8_t rx[18] = {0};
+    uint8_t channels = adc->total_channels;
+    uint8_t payload_len = 3 + (channels * 3);
+    uint8_t frame_len = payload_len + 3;
+    spidev_transfer(adc->spi, 1, frame_len, rx);
     adc->pending_flag = 0;
     barrier();
 
@@ -115,19 +119,24 @@ ads131m02_read_adc(struct ads131m02_adc *adc, uint8_t oid)
     if (rx[0] & STATUS_RESET_BIT)
         adc->last_error = SAMPLE_ERROR_RESET;
 
-    // Validate CRC (covers first 9 bytes: STATUS + CH0 + CH1)
-    uint16_t calc_crc = calc_crc16(rx, 9);
-    uint16_t recv_crc = ((uint16_t)rx[9] << 8) | rx[10];
+    // Validate CRC (covers STATUS + channel data words)
+    uint16_t calc_crc = calc_crc16(rx, payload_len);
+    uint16_t recv_crc = ((uint16_t)rx[payload_len] << 8) | rx[payload_len + 1];
     uint8_t crc_error = (calc_crc != recv_crc);
 
-    // Read counts from selected channel
-    uint32_t counts = ((uint32_t)rx[adc->channel_offset] << 16)
-                    | ((uint32_t)rx[adc->channel_offset + 1] << 8)
-                    | ((uint32_t)rx[adc->channel_offset + 2]);
-
-    // Sign-extend 24-bit two's complement to 32-bit
-    if (counts & 0x800000)
-        counts |= 0xFF000000;
+    // Compute absolute magnitude directly from 24-bit two's-complement
+    // channel words and sum (branchless, no explicit sign extension).
+    uint32_t counts = 0;
+    for (uint8_t ch = 0; ch < channels; ch++) {
+        uint8_t offset = 3 + (ch * 3);
+        uint32_t raw = ((uint32_t)rx[offset] << 16)
+                     | ((uint32_t)rx[offset + 1] << 8)
+                     | ((uint32_t)rx[offset + 2]);
+        uint32_t sign = raw >> 23;            // 0 for +, 1 for -
+        uint32_t mask = 0U - sign;            // 0x00000000 or 0xFFFFFFFF
+        uint32_t mag = ((raw ^ (mask & 0xFFFFFFU)) + sign) & 0xFFFFFFU;
+        counts += mag;
+    }
 
     // Hard errors persist, CRC errors are transient (one sample only)
     if (adc->last_error)
@@ -140,36 +149,36 @@ ads131m02_read_adc(struct ads131m02_adc *adc, uint8_t oid)
     add_sample(adc, oid, counts);
 }
 
-// Create an ads131m02 sensor
+// Create an ads131m0x sensor
 void
-command_config_ads131m02(uint32_t *args)
+command_config_ads131m0x(uint32_t *args)
 {
-    struct ads131m02_adc *adc = oid_alloc(args[0]
-                , command_config_ads131m02, sizeof(*adc));
-    adc->timer.func = ads131m02_event;
+    struct ads131m0x_adc *adc = oid_alloc(args[0]
+                , command_config_ads131m0x, sizeof(*adc));
+    adc->timer.func = ads131m0x_event;
     adc->pending_flag = 0;
     adc->spi = spidev_oid_lookup(args[1]);
     adc->data_ready = gpio_in_setup(args[2], 0);
-    uint8_t ch = args[3];
-    adc->channel_offset = (ch > 0) ? 6 : 3;
+    uint8_t total_ch = args[3];
+    adc->total_channels = (total_ch >= 2 && total_ch <= 4) ? total_ch : 2;
 }
-DECL_COMMAND(command_config_ads131m02, "config_ads131m02 oid=%c spi_oid=%c data_ready_pin=%u channel=%c");
+DECL_COMMAND(command_config_ads131m0x, "config_ads131m0x oid=%c spi_oid=%c data_ready_pin=%u total_ch=%c");
 
 void
-ads131m02_attach_load_cell_probe(uint32_t *args) {
+ads131m0x_attach_load_cell_probe(uint32_t *args) {
     uint8_t oid = args[0];
-    struct ads131m02_adc *adc = oid_lookup(oid, command_config_ads131m02);
+    struct ads131m0x_adc *adc = oid_lookup(oid, command_config_ads131m0x);
     adc->lce = load_cell_probe_oid_lookup(args[1]);
 }
-DECL_COMMAND(ads131m02_attach_load_cell_probe,
-    "ads131m02_attach_load_cell_probe oid=%c load_cell_probe_oid=%c");
+DECL_COMMAND(ads131m0x_attach_load_cell_probe,
+    "ads131m0x_attach_load_cell_probe oid=%c load_cell_probe_oid=%c");
 
 // start/stop capturing ADC data
 void
-command_query_ads131m02(uint32_t *args)
+command_query_ads131m0x(uint32_t *args)
 {
     uint8_t oid = args[0];
-    struct ads131m02_adc *adc = oid_lookup(oid, command_config_ads131m02);
+    struct ads131m0x_adc *adc = oid_lookup(oid, command_config_ads131m0x);
     sched_del_timer(&adc->timer);
     adc->pending_flag = 0;
     adc->rest_ticks = args[1];
@@ -185,33 +194,33 @@ command_query_ads131m02(uint32_t *args)
     sched_add_timer(&adc->timer);
     irq_enable();
 }
-DECL_COMMAND(command_query_ads131m02, "query_ads131m02 oid=%c rest_ticks=%u");
+DECL_COMMAND(command_query_ads131m0x, "query_ads131m0x oid=%c rest_ticks=%u");
 
 void
-command_query_ads131m02_status(const uint32_t *args)
+command_query_ads131m0x_status(const uint32_t *args)
 {
     uint8_t oid = args[0];
-    struct ads131m02_adc *adc = oid_lookup(oid, command_config_ads131m02);
+    struct ads131m0x_adc *adc = oid_lookup(oid, command_config_ads131m0x);
     irq_disable();
     const uint32_t start_t = timer_read_time();
-    uint8_t is_data_ready = ads131m02_is_data_ready(adc);
+    uint8_t is_data_ready = ads131m0x_is_data_ready(adc);
     irq_enable();
     uint8_t pending_bytes = is_data_ready ? BYTES_PER_SAMPLE : 0;
     sensor_bulk_status(&adc->sb, oid, start_t, 0, pending_bytes);
 }
-DECL_COMMAND(command_query_ads131m02_status, "query_ads131m02_status oid=%c");
+DECL_COMMAND(command_query_ads131m0x_status, "query_ads131m0x_status oid=%c");
 
 // Background task that performs measurements
 void
-ads131m02_capture_task(void)
+ads131m0x_capture_task(void)
 {
-    if (!sched_check_wake(&wake_ads131m02))
+    if (!sched_check_wake(&wake_ads131m0x))
         return;
     uint8_t oid;
-    struct ads131m02_adc *adc;
-    foreach_oid(oid, adc, command_config_ads131m02) {
+    struct ads131m0x_adc *adc;
+    foreach_oid(oid, adc, command_config_ads131m0x) {
         if (adc->pending_flag)
-            ads131m02_read_adc(adc, oid);
+            ads131m0x_read_adc(adc, oid);
     }
 }
-DECL_TASK(ads131m02_capture_task);
+DECL_TASK(ads131m0x_capture_task);

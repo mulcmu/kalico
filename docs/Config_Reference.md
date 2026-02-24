@@ -5984,6 +5984,11 @@ cs_pin:
 data_ready_pin:
 #   Pin connected to the ADS131M02 data ready (DRDY) line. This parameter must
 #   be provided.
+#clock_pin:
+#   Optional pin connected to the ADS131M02 external clock input. When
+#   provided, the pin is configured for a fixed 8MHz timer-based clock
+#   output (same path used by [static_pwm_clock]).
+#   The selected pin must support hardware PWM on the target MCU.
 #channel: 0
 #   Which ADC channel to read: 0 or 1. The default is 0.
 #gain: 128
