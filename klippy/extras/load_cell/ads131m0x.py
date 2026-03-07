@@ -6,7 +6,7 @@
 #  - At least one channel must be enabled.
 #  - The hardware offset counts are applied by ADC so the raw sample values are already compenstated.
 #  - The output count is the sum of the absolute value of the raw counts across all channels.
-#  - Disabled channels read as zero.
+#  - Disabled channels read as zero and do not impact total count returned.
 #  - The same gain setting is applied to all enabled channels.
 #  - Only the high resolution power mode is supported with nominal external clock frequency of 8Mhz 
 #    (provided by configured clock pin or other external hardware clock generator).
