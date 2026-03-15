@@ -948,8 +948,26 @@ class ProbePointsHelper:
             return True
         # Move to next XY probe point
         toolhead.manual_move(self._next_pos(), self.speed)
+        self._apply_tension_cycle()
         return False
-
+    
+    def _apply_tension_cycle(self):
+        # Sweep X and Y ±1mm a few times to help equalize belt tension
+        toolhead = self.printer.lookup_object('toolhead')
+        start_pos = toolhead.get_position()
+        x0, y0 = start_pos[0], start_pos[1]
+        sweep_delta = 1.0
+        sweep_cycles = 7
+        for _ in range(sweep_cycles):
+            # sweep X
+            toolhead.manual_move([x0 + sweep_delta, None, None], self.speed)
+            toolhead.manual_move([x0 - sweep_delta, None, None], self.speed)
+            toolhead.manual_move([x0, y0, None], self.speed)
+            # sweep Y
+            toolhead.manual_move([None, y0 + sweep_delta, None], self.speed)
+            toolhead.manual_move([None, y0 - sweep_delta, None], self.speed)
+            toolhead.manual_move([x0, y0, None], self.speed)
+      
     def start_probe(self, gcmd):
         self.retry_session.start(gcmd)
         self.retry_session.reset_all()
