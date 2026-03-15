@@ -34,6 +34,7 @@ MeasureRidgeRadius = 5.0 - 0.5
 # How much to prefer a distance measurement over a height measurement
 MEASURE_WEIGHT = 0.5
 
+HexagonProbePattern_39points= [(0.31111, 0.48497), (-0.31111, 0.0), (0.15556, 0.24249), (-0.46667, 0.72746), (-0.46667, -0.72746), (0.62222, 0.0), (0.15556, -0.24249), (-0.62222, 0.0), (0.0, -0.48497), (0.0, 0.96995), (-0.15556, 0.24249), (0.77778, 0.24249), (0.77778, -0.24249), (0.0, 0.48497), (0.0, -0.96995), (0.46667, 0.72746), (-0.15556, -0.24249), (0.46667, -0.72746), (-0.31111, -0.48497), (0.31111, 0.0), (-0.46667, 0.24249), (0.15556, 0.72746), (-0.46667, -0.24249), (-0.31111, 0.48497), (-0.93333, 0.0), (0.62222, -0.48497), (0.15556, -0.72746), (0.62222, 0.48497), (-0.62222, -0.48497), (-0.62222, 0.48497), (0.0, 0.0), (0.46667, 0.24249), (0.31111, -0.48497), (-0.15556, 0.72746), (-0.15556, -0.72746), (0.93333, 0.0), (0.46667, -0.24249), (-0.77778, 0.24249), (-0.77778, -0.24249)]
 
 # Convert distance measurements made on the calibration object to
 # 3-tuples of (actual_distance, stable_position1, stable_position2)
@@ -99,12 +100,13 @@ class DeltaCalibrate:
         )
         # Calculate default probing points
         radius = config.getfloat("radius", above=0.0)
-        points = [(0.0, 0.0)]
-        scatter = [0.95, 0.90, 0.85, 0.70, 0.75, 0.80]
-        for i in range(6):
-            r = math.radians(90.0 + 60.0 * i)
-            dist = radius * scatter[i]
-            points.append((math.cos(r) * dist, math.sin(r) * dist))
+        points = [(x * radius, y * radius) for x, y in HexagonProbePattern_39points]
+        # points = [(0.0, 0.0)]
+        # scatter = [0.95, 0.90, 0.85, 0.70, 0.75, 0.80]
+        # for i in range(6):
+        #     r = math.radians(90.0 + 60.0 * i)
+        #     dist = radius * scatter[i]
+        #     points.append((math.cos(r) * dist, math.sin(r) * dist))
         self.probe_helper = probe.ProbePointsHelper(
             config, self.probe_finalize, default_points=points
         )
