@@ -4,12 +4,11 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import collections
+import logging
 
 from klippy.configfile import ConfigWrapper
-from klippy.extras.load_cell.interfaces import BulkAdcSensor
-from klippy.extras.load_cell import hx71x
-from klippy.extras.load_cell import ads1220
 from klippy.extras.bulk_sensor import BatchWebhooksClient
+from klippy.extras.load_cell.interfaces import BulkAdcSensor
 
 
 # alternative to numpy's column selection:
@@ -399,8 +398,8 @@ class LoadCellSampleCollector:
             if result is None:
                 self._finish_collecting()
                 raise self._printer.command_error(
-                    "LoadCellSampleCollector timed out! Errors: %i,"
-                    " Overflows: %i" % (self._errors, self._overflows)
+                    f"LoadCellSampleCollector timed out! Errors: {self._errors},"
+                    f" Overflows: {self._overflows}"
                 )
         return self._finish_collecting()
 
@@ -465,7 +464,13 @@ class LoadCell:
         LoadCellCommandHelper(config, self)
         # Client support:
         self.clients = ApiClientHelper(printer)
-        header = {"header": ["time", "force (g)", "counts", "tare_counts"]}
+        self.channel_count = self.sensor.get_channel_count()
+        header_labels = ["time", "force (g)", "counts", "tare_counts"]
+        if self.channel_count > 1:
+            for idx in range(self.channel_count):
+                header_labels.append(f"channel_{idx}_force (g)")
+                header_labels.append(f"channel_{idx}_counts")
+        header = {"header": header_labels}
         self.clients.add_mux_endpoint(
             "load_cell/dump_force", "load_cell", self.name, header
         )
@@ -490,10 +495,25 @@ class LoadCell:
             return None
         samples = []
         for row in data:
-            # [time, grams, counts, tare_counts]
-            samples.append(
-                [row[0], self.counts_to_grams(row[1]), row[1], self.tare_counts]
-            )
+            channel_counts = row[1:]
+            if len(channel_counts) != (self.channel_count * 2):
+                logging.info(
+                    f"Missing Sensor Channels! Expected: "
+                    f"{self.channel_count}, found "
+                    f"{len(channel_counts) / 2}"
+                )
+            sum_counts = sum(channel_counts)
+            sample = [
+                row[0],
+                self.counts_to_grams(sum_counts),
+                sum_counts,
+                self.tare_counts,
+            ]
+            if self.channel_count > 1:
+                for counts in channel_counts[::2]:
+                    sample.append(self.counts_to_grams(counts))
+                    sample.append(counts)
+            samples.append(sample)
         msg = {"data": samples, "errors": errors, "overflows": overflows}
         self.clients.send(msg)
         return True
@@ -628,16 +648,3 @@ class LoadCell:
             }
         )
         return status
-
-
-def load_config(config):
-    # Sensor types
-    sensors = {}
-    sensors.update(hx71x.HX71X_SENSOR_TYPES)
-    sensors.update(ads1220.ADS1220_SENSOR_TYPE)
-    sensor_class = config.getchoice("sensor_type", sensors)
-    return LoadCell(config, sensor_class(config))
-
-
-def load_config_prefix(config):
-    return load_config(config)

@@ -4,11 +4,11 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-from klippy.configfile import ConfigWrapper
-from klippy.extras.probe import PrinterProbe, GcodeNozzleScrubber, RetryPolicy
 from klippy import Printer
-from klippy.toolhead import ToolHead
+from klippy.configfile import ConfigWrapper
+from klippy.extras.probe import GcodeNozzleScrubber, PrinterProbe, RetryPolicy
 from klippy.gcode import GCodeCommand, GCodeDispatch
+from klippy.toolhead import ToolHead
 
 
 class NozzleCleanupOptions:
@@ -126,8 +126,9 @@ class NozzleCleanup:
         return is_good
 
     def retract_move(self):
+        z_pos = self._get_toolhead().get_position()[2]
         self._get_toolhead().manual_move(
-            [None, None, self.options.sample_retract_dist],
+            [None, None, z_pos + self.options.sample_retract_dist],
             self.options.lift_speed,
         )
 

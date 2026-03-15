@@ -25,6 +25,8 @@ reference_tare_counts: 12345
   * [`hx711`](Config_Reference.md#hx711)
   * [`hx717`](Config_Reference.md#hx717)
   * [`ads1220`](Config_Reference.md#ads1220)
+  * [`ads131m02`](Config_Reference.md#ads131m02)
+  * [`ads131m04`](Config_Reference.md#ads131m04)
 
 - `counts_per_gram: 245`\
   _Default Value: None_\
@@ -149,26 +151,31 @@ reference_tare_counts: 12345
 # load cell probe settings
 trigger_force: 75
 force_safety_limit: 2000
+drift_safety_limit: 1000
 drift_filter_cutoff_frequency: 0.5
 # probe settings
 z_offset: 0.0
 ```
-
+- `sensor_type: hx717`
 - `counts_per_gram: 245`\
-  _Default Value: None_\
-  Conversion factor from raw sensor counts to grams, calculated by `LOAD_CELL_CALIBRATE`. All probing force limits depend on this value being accurate.
-
+  These are the same as for a basic load cell
 - `reference_tare_counts: 12345`\
   _Default Value: None_\
-  Baseline tare value in raw sensor counts, set by `LOAD_CELL_CALIBRATE`. Used as the zero value for with `force_safety_limit` to define the safe operating range.
-
-- `force_safety_limit: 2000`\
-  _Default Value: 2000 (2 kilograms)_\
-  Maximum absolute force in grams, relative to `reference_tare_counts`, allowed during homing or probing. If exceeded, the probe stops with an error TK`!! Load Cell Probe Error: load exceeds safety limit`
+  Baseline tare value in raw sensor counts, set by `LOAD_CELL_CALIBRATE`. Used as the zero value for `force_safety_limit` to define the safe operating range.
 
 - `trigger_force: 75`\
   _Default Value: 75 (75 grams)_\
-  Force in grams to trigger the endstop during probing, measured relative to the tare value at the start of the probe. Expect overshoot; higher probing speed or lower sample rate increases peak force. See [Multi MCU Homing](Multi_MCU_Homing.md) for multi-MCU timing considerations.
+  Force in grams to trigger the endstop during probing, measured relative to the tare value at the start of the probe. Expect overshoot; higher probing speed or lower sample rate increases peak force. See [Multi MCU Homing](Multi_MCU_Homing.md) for multi-MCU timing considerations. The 75g default is conservative. Higher values, up to 200g, can improve performance when handling oozy filament.
+
+- `force_safety_limit: 2000`\
+  _Default Value: 2000 (+/-2Kg)_\
+  To safely start a probing move, the force on the probe must be below this limit. This treats `reference_tare_counts` as its zero value. This check can be disabled by setting the value to 0. If exceeded, the probe stops with an error `!! Load Cell Probe Error: force of 3000g exceeds force_safety_limit (2000g) before probing!`. This value needs to be large enough to allow for:
+  - Bowden tube & drag chain forces that change throughout the print volume & probing move length
+  - Temperature drift across the entire probing temperature range
+
+- `drift_safety_limit: 1000`\
+  _Default Value: 1000 (+/-1Kg)_\
+  This is the most force that the probe will allow during a probing move before triggering an error. Set to 0 to disable this safety check. If exceeded, the probe stops with an error `!! Load Cell Probe Error: force exceeded drift_safety_limit before triggering!`. This safety measure is important when using the `drift_filter_cutoff_frequency` as it is possible to defeat probe triggering with too high of a cutoff frequency.
 
 - `drift_filter_cutoff_frequency: 0.5`\
   _Default Value: None (disabled)_\
@@ -176,8 +183,7 @@ z_offset: 0.0
 
 - `z_offset: 0.0`\
   _Required_\
-  The distance (in mm) between the bed and the nozzle when the probe
-  triggers. For load cell probes this is 0.
+  The distance (in mm) between the bed and the nozzle when the probe triggers. For load cell probes this is 0.
 
 See the [configuration reference](Config_Reference.md#load_cell_probe) for all available options.
 
@@ -195,13 +201,17 @@ This setting converts raw counts to grams. All safety limits are in gram units. 
 Probing always overshoots `trigger_force` before stopping. A setting of 100 g may result in 350 g peak force. Overshoot increases with faster probing speed, low sample rate, or multi-MCU configurations.
 
 **`force_safety_limit` protection:**
-This setting prevents several failure modes:
-- Excessive `drift_filter_cutoff_frequency` causing filtered-out probe events
-- Repeated probing in one location without retraction accumulating force
-- Damaged strain gauge changing `reference_tare_counts`
-- Temperature changes altering strain gauge baseline readings
+This setting detects excessive force on the probe before starting homing or probing. If the limit is exceeded, the probe will stop with an error, e.g. `!! Load Cell Probe Error: force of 3000g exceeds force_safety_limit (2000g) before probing!`. This could be caused by: 
+- The probe colliding with the bed before probing starts. e.g. by moving horizontally into a tilted bed
+- Excessive force from the bowden tube or drag chain
+- Excessive force on the strain gauge caused by the extruder pushing on the filament
+- A damaged strain gauge, causing the zero point to move too far from the `reference_tare_counts` value
 
-If the limit is exceeded, the probe will stop with an error: `!! Load Cell Probe Error: load exceeds safety limit`
+**`drift_safety_limit` protection:**
+This sets the most force the probe will allow before it triggers. If the measured force changes by more than the limit, the probe will stop with an error: `!! Load Cell Probe Error: force exceeded drift_safety_limit before triggering!`. This could be triggered for several reasons:
+- The probe being actively heated while probing, causing the tare value to drift
+- Setting the `drift_filter_cutoff_frequency` too high, causing the tap event to be filtered out
+- A large change in the bowden tube/drag chain force while probing
 
 **Watchdog task:**
 During homing, a watchdog monitors sensor data. If the sensor fails to send measurements for 2 sample periods, the MCU shuts down with error `!! Load Cell Probe Error: timed out waiting for sensor data`. This usually indicates an ADC fault or inadequate grounding. Ensure the frame, power supply, and print bed are grounded. Multiple ground connections may be required. Sand anodized aluminum at ground connection points for good electrical contact.
@@ -382,7 +392,7 @@ Using `horizontal_z_clearance`, the probe always retracts by that amount between
 ```
 NOZZLE_CLEANUP
 ```
-This taps the nozzle until it reports 3 successful probes in a row, proving that the nozzle is clean. This clears the nozzle of any ooze just before meshing for best mesh quality. This should be performed outside the print area. See [NOZZLE_CLEANUP](G-Codes.md#nozzle-cleanup)
+This taps the nozzle until it reports 3 successful probes in a row, proving that the nozzle is clean. This clears the nozzle of any ooze just before meshing for best mesh quality. This should be performed outside the print area. See [NOZZLE_CLEANUP](G-Codes.md#nozzle_cleanup)
 
 **Use the CIRCLE strategy for meshing**
 ```
@@ -414,22 +424,22 @@ The `drift_filter_cutoff_frequency` parameter can be automatically calibrated us
 
 **Note:** Over-aggressive `drift_filter_cutoff_frequency` can distort tap shape and timing, triggering validation failures (e.g., `TAP_BREAK_CONTACT_TOO_LATE`). Reduce cutoff frequency or probing speed if such errors appear.
 
-Tuning of other filter parameters is beyond the scope of this documentation. A Jupyter notebook is provided in [scripts/filter_workbench.ipynb](../scripts/filter_workbench.ipynb) with an example of detailed analysis.
+Manual tuning of other filter parameters is beyond the scope of this documentation. A Jupyter notebook is provided in [scripts/filter_workbench.ipynb](../scripts/filter_workbench.ipynb) with an example of detailed analysis.
 
 ### Tap Validation
 
 **Introduction to Tap Probing**
 
-Load cell probe works differenly than other probes, it "taps" on the build surface. After the probe makes contact with the build surface it makes a small move back away from the build surface, called the pullback move. This combination of down/up motions is called a "tap". The complete tap sequence is analized and a representation is built from the raw force data. This representation is a series of points connected by lines. This is a plot of a typical tap with the movement phases clearly marked:
+Load cell probe works differently than other probes, it "taps" on the build surface. After the probe makes contact with the build surface it makes a small move back away from the build surface, called the pullback move. This combination of down/up motions is called a "tap". The complete tap sequence is analyzed and a representation is built from the raw force data. This representation is a series of points connected by lines. This is a plot of a typical tap with the movement phases clearly marked:
 
-<a id="fig-tap-phases"></a>
+##### Figure 1: Tap Phases
 ![Valid tap showing probe, dwell, and pullback phases](img/load-cell/tap-phases.png)
 
 *Figure 1 — Valid tap phases. The graph shows measured force (black line) over time with fitted validation lines (red). Three phases are color-coded: Probe (blue) where force rises as the nozzle contacts the bed, Dwell (green) where force stabilizes after trigger, and Pullback (red) where force returns to baseline as the pullback move lifts the nozzle. Vertical lines mark phase boundaries: blue (probe end/dwell start), green (dwell end/pullback start), red (pullback end). An ideal tap shows a sharp rise during probe, stable force during dwell, and clean return to baseline during pullback.*
 
 Each line in the plot has a name:
 
-<a id="fig-tap-segments"></a>
+##### Figure 2: Tap Segments
 ![Tap segments labeled on real force data](img/load-cell/tap-segments.png)
 
 *Figure 1a — Tap plot showing the named tap lines: Approach (flat baseline before contact), Compression (steep rise as force builds), Dwell (stable high force while probe settles), Decompression (force drop during pullback), and Departure (return to baseline as pullback finishes). Vertical colored lines mark the boundaries between phases.*
@@ -446,7 +456,7 @@ When a bad quality tap is detected a specific error code is logged. Most of thes
 
 | Error Code                    | Description                                                              | Common Causes                                                                                                         |
 |-------------------------------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
-| `TAP_CHRONOLOGY`              | The 4 points on the thap graphs are out of order in time                 | Fouling: the data is so distorted that it doesnt look like a tap                                                      |
+| `TAP_CHRONOLOGY`              | The 4 points on the tap graphs are out of order in time                  | Fouling: the data is so distorted that it doesnt look like a tap                                                      |
 | `TAP_SHAPE_INVALID`           | One of the segments of the tap shape doesnt go in the expected direction | Fouling: the data is so distorted that it doesnt look like a tap                                                      |
 | `TAP_BREAK_CONTACT_TOO_EARLY` | Break-contact detected too early in the pullback move                    | The `pullback_distance` is too long.                                                                                  |
 | `TAP_BREAK_CONTACT_TOO_LATE`  | Break-contact is detected too late in the pullback move                  | The `pullback_distance` was too short.                                                                                |
@@ -459,7 +469,7 @@ When a bad quality tap is detected a specific error code is logged. Most of thes
 
 In addition to the basic tap shape checks, a module called the **Tap Quality Classifier** gives each tap a quality score from 0 to 100. The classifier's main goal is to differentiate between clean taps that can be used and oozy taps that cannot.
 
-The classifier uses ratio metrcis to make it more transferrable between different printers. It uses ratios of the total force in the compression line as this is the best reference metric in the tap. This allows other quantities to scale with the compression force. Whereas absolute metrics (angles, forces) work well for a single physical toolhead design and probing configuration but break when those things are changed.
+The classifier uses ratio metrics to make it more transferable between different printers. It uses ratios of the total force in the compression line as this is the best reference metric in the tap. This allows other quantities to scale with the compression force. Whereas absolute metrics (angles, forces) work well for a single physical toolhead design and probing configuration but break when those things are changed.
 
 ##### Tap Quality Components
 
@@ -499,38 +509,42 @@ This section covers guidance for developing toolhead boards with load cell probe
 
 ### Tap Analysis and Validation
 
-The load cell probe performs a full tap analysis on each probe attempt. Samples are analyzed to identify tap points and construct lines representing the approach, compression, dwell, decompression, and deaparture phases. The points are identified using an exhaustive elbow finding algorithm and the lines are constructed with linear regression. Then the intersections of those lines are calculated resulting in a set of points.
+The load cell probe performs a full tap analysis on each probe attempt. Samples are analyzed to identify tap points and construct lines representing the approach, compression, dwell, decompression, and departure phases. The points are identified using an exhaustive elbow finding algorithm and the lines are constructed with linear regression. Then the intersections of those lines are calculated resulting in a set of points.
 
-See [Figures 2](#) and [Figure 3](#)
+See [Figures 2](#figure-2-low-decompression-force) and [Figure 3](#figure-3-major-fouling)
 
 Next a basic set of sanity checks are performed:
 
-1. **Motion chronology**: The points are checked to make sure they are in order chronologically. It is possible they could be out of order because they are based ont he force data, linear regression and intersections.
+1. **Motion chronology**: The points are checked to make sure they are in order chronologically. It is possible they could be out of order because they are based on the force data, linear regression and intersections.
 
 2. **Shape validation**: The points are checked to make sure they from a "tap" shaped plot. This can be either a positive or negative trapezoidal shape.
 
 3. **Break-contact timing**: The probe validates that break contact time occurs within the middle two thirds of the pullback move. Too early or too late make the analysis less reliable.
 
-If any of these checks fail the probe is marked as bad. If they all pass the configured `TapClassifierModule` is invoked to further decide if the tap is good of bad. The built in classifier is called `SimpleTapClassifier` and is turned on by default.
+If any of these checks fail the probe is marked as bad. If they all pass the configured `TapClassifierModule` is invoked to further decide if the tap is good of bad. The built-in classifier is called `TapQualityClassifier` and is enabled by calibrating the `decompression_angle`.
 
-**Custom tap classifiers**: It is possible to completely replace the built in  `SimpleTapClassifier` with a custom implementation via the `tap_classifier_module` configuration value. The classifier receives the `TapAnalysis` object and can perform additional validation or modify the tap position calculation. With an appropriate data set it is possible to use Machine Learning techniques (e.g. [Decision Trees](https://scikit-learn.org/stable/modules/tree.html)) to build a more accurate tap classifier that is tailored to a specific printer's hardware.
+**Custom tap classifiers**: It is possible to completely replace the built in  `TapQualityClassifier` with a custom implementation via the `tap_classifier_module` configuration value. The classifier receives the `TapAnalysis` object and can perform additional validation or modify the tap position calculation. With an appropriate data set it is possible to use Machine Learning techniques (e.g. [Decision Trees](https://scikit-learn.org/stable/modules/tree.html)) to build a more accurate tap classifier that is tailored to a specific printer's hardware.
 
 #### Visual Examples of Failed Taps
 
-For quick diagnosis, compare your tap trace to [Figure 1](#fig-tap-phases) (valid tap) and the failure examples below. Match the pattern to the error code in the table above.
+For quick diagnosis, compare your tap trace to [Figure 1](#figure-1-tap-phases) (valid tap) and the failure examples below. Match the pattern to the error code in the table above.
 
+##### Figure 2: Low Decompression Force
 ![Low decompression force failure](img/load-cell/bad-tap-low-decompression-force.png)
 
 *Figure 2 — Low decompression force (`LOW_DECOMPRESSION_FORCE`). The build sheet did not make firm contact with the heater bed (plastic debris the sheet), causing force to drop significantly during the dwell phase. The decompression force is too low compared to the trigger force.*
 
+##### Figure 3: Major Fouling
 ![Major plastic fouling](img/load-cell/bad-tap-major-plastic-fouling.png)
 
 *Figure 3 — Major plastic fouling. Soft plastic on the nozzle causes a major drop in peak force and continued force decay during dwell as the plastic oozes out from between the nozzle and bed. This can result in `LOW_DECOMPRESSION_FORCE` errors.*
 
+##### Figure 4: Pullback Adhesion
 ![Minor plastic adhesion during pullback](img/load-cell/bad-tap-minor-plastic-adhesion.png)
 
 *Figure 4 — Minor plastic adhesion. Oozing plastic inside the nozzle orifice causes a small force dip during the pullback phase (circled). the plastic pulls the nozzle down as it lifts off the build sheet. This tap passed validation as the anomaly is minor, but indicates the nozzle temperature may be too high or plastic is oozing.*
 
+##### Figure 5: Baseline Inconsistent
 ![Baseline force inconsistent failure](img/load-cell/bad-tap-baseline-force-inconsistent.png)
 
 *Figure 5 — Baseline force inconsistent (`BASELINE_FORCE_INCONSISTENT`). Plastic on the nozzle causes a "slow collision" visible as a positive slope in the approach line. The compression angle is much less than 90 degrees, and the baseline force differs significantly between approach and departure.*
@@ -544,7 +558,7 @@ Recommended sensor characteristics:
 - Programmable gain amplifier with 128× gain to eliminate external amplifiers
 - SPI reset indication to detect sensor restarts, a common indication of electrical problems
 - Selectable sample rate between 350 Hz and 2 kHz (rates below 250 Hz require slower probing speeds and increase toolhead force)
-- For under-bed applications with multiple load cells, simultaneous sampling on all channels (multiplexed ADCs have settling delays after channel switches)
+- For under-bed applications with multiple load cells, use an ADC with simultaneous sampling on all channels, such as the [ADS131M04](Config_Reference.md#ads131m04). Multiplexed ADCs have settling delays after channel switches and issues with time smearing of the readings which reduce accuracy.
 
 Klipper's `bulk_sensor` and `load_cell_probe` infrastructure simplifies support for new sensors. Sensors can be configured from Python. with a minimal sampling loop written in C.
 

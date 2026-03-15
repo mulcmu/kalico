@@ -104,6 +104,9 @@ gcode:
   RESTORE_GCODE_STATE NAME=clean_nozzle_state
 ```
 
+Additionally, in macro contexts you can use `RETURN` to end macro execution
+early.
+
 #### Jinja2: Macro parameters
 
 It is often useful to inspect parameters passed to the macro when
@@ -214,6 +217,16 @@ emit("G90")
 emit("G0 Z15 F300")
 ...
 
+```
+
+#### Python: Macro parameters
+
+Parameters passed to python macros are stored in the `params` variable.
+
+```
+[gcode_macro PARAMETER_EXAMPLE]
+gcode:
+  !respond_info(f"{params}")
 ```
 
 #### Python: Rawparams

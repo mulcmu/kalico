@@ -4,8 +4,8 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
-from . import bus
 
+from . import bus
 from .danger_options import get_danger_options
 
 ######################################################################
@@ -112,6 +112,10 @@ class HTU21D:
         self.printer.add_object("htu21d " + self.name, self)
         self.printer.register_event_handler(
             "klippy:connect", self.handle_connect
+        )
+        self.printer.register_event_handler(
+            self.mcu.get_non_critical_reconnect_event_name(),
+            self.handle_connect,
         )
 
     def handle_connect(self):

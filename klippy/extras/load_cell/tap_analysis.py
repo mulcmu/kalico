@@ -4,13 +4,18 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 from __future__ import annotations
+
+import copy
+import logging
+import math
+import time
 from typing import Optional
 
-import logging, math, time
-
-from gcode import GCodeCommand
-from .load_cell import ApiClientHelper
 import numpy as np
+
+from klippy.gcode import GCodeCommand
+
+from .load_cell import ApiClientHelper
 
 
 class TapClassifierModule(object):
@@ -663,10 +668,10 @@ class TapAnalysis:
 # Orchestrate TapAnalysis and TapClassifier. Handle timing, error capture,
 # event broadcast, clients & logging
 class TapAnalysisHelper:
-    def __init__(self, printer, name, tap_classifier):
+    def __init__(self, printer, name, tap_classifier: TapClassifierModule):
         self._printer = printer
         self._tap_classifier = tap_classifier
-        self._callbacks = []
+        self._calibration_cb = None
         # webhooks support
         self._clients = ApiClientHelper(printer)
         header = {"header": ["probe_tap_event"]}
@@ -682,6 +687,11 @@ class TapAnalysisHelper:
         except TapValidationError as ve:
             tap_analysis.set_is_valid(False)
             tap_analysis.set_validation_error(ve)
+        # notify calibration tool, if any:
+        if self._calibration_cb and not self._calibration_cb(
+            copy.deepcopy(tap_analysis)
+        ):
+            self._calibration_cb = None
         # tap classifier always gets to process the data
         try:
             self._tap_classifier.classify(tap_analysis, gcmd)
@@ -693,10 +703,6 @@ class TapAnalysisHelper:
         tap_analysis.set_collection_time(collection_time)
         # broadcast tap event data:
         self._clients.send({"tap": tap_analysis.to_dict()})
-        for callback in self._callbacks:
-            result = callback(tap_analysis)
-            if not result:
-                self._callbacks.remove(callback)
         self._log_errors(tap_analysis)
         return tap_analysis
 
@@ -714,5 +720,5 @@ class TapAnalysisHelper:
     def add_client(self, callback):
         self._clients.add_client(callback)
 
-    def add_callback(self, callback):
-        self._callbacks.append(callback)
+    def set_calibration_callback(self, callback):
+        self._calibration_cb = callback

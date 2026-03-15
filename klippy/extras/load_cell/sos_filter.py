@@ -4,8 +4,10 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Optional, Union
+
 from klippy.mcu import MCU
 
 MAX_INT32 = 2**31
@@ -48,7 +50,7 @@ class DigitalFilter:
         try:
             import scipy.signal as signal
         except:
-            raise cfg_error("DigitalFilter require the SciPy module")
+            raise cfg_error("DigitalFilter requires the SciPy module")
         if highpass:
             self.filter_sections.append(
                 self._butter(highpass, "highpass", highpass_order)

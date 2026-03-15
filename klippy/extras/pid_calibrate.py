@@ -3,7 +3,9 @@
 # Copyright (C) 2016-2018  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import math, logging
+import logging
+import math
+
 from . import heaters
 
 
@@ -79,7 +81,7 @@ class PIDCalibrate:
         if write_file:
             fname = "/tmp/heattest.csv"
             if calibrate_secondary:
-                fname = "tmp/heattest_secondary.txt"
+                fname = "/tmp/heattest_secondary.csv"
             calibrate.write_file(fname)
 
         if calibrate.check_busy(0.0, 0.0, 0.0):

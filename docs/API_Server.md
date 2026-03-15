@@ -392,7 +392,7 @@ and might return:
 `{"id": 123,"result":{"header":["probe_tap_event"]}}`
 and might later produce asynchronous messages such as:
 ```
-{"params":{"tap":'{
+{"params":{"tap":{
    "time": [118032.28039, 118032.2834, ...],
    "force": [-459.4213119680034, -458.1640702543264, ...],
 }}}

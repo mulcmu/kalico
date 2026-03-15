@@ -3,7 +3,8 @@
 # Copyright (C) 2025  Gareth Farrington <gareth@waves.ky>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import json, logging
+import json
+import logging
 from pathlib import Path
 
 
@@ -18,7 +19,9 @@ class TapRecorder:
         )
         self._register_commands()
         self._printer.register_event_handler("klippy:connect", self._on_connect)
-        self._printer.register_event_handler("klippy:disconnect", self._on_disconnect)
+        self._printer.register_event_handler(
+            "klippy:disconnect", self._on_disconnect
+        )
 
     def _on_connect(self):
         load_cell_probe = self._printer.lookup_object(self._probe_name)
@@ -59,7 +62,9 @@ class TapRecorder:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             full_path = str(file_path)
             gcmd.respond_info("Saving tap data to %s" % (full_path,))
-            self._file_handle = file_path.open("a", encoding="utf-8", buffering=1)
+            self._file_handle = file_path.open(
+                "a", encoding="utf-8", buffering=1
+            )
             self._is_recording = True
         except Exception as e:
             error_msg = "Failed to open file %s: %s" % (full_path, e)

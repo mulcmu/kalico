@@ -4,13 +4,14 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
+
 from klippy.extras import bulk_sensor, bus
-from klippy.mcu import MCU
 from klippy.extras.load_cell.interfaces import (
     BulkAdcData,
-    LoadCellSensor,
     BulkAdcDataCallback,
+    LoadCellSensor,
 )
+from klippy.mcu import MCU
 
 #
 # Constants
@@ -190,6 +191,9 @@ class ADS1220(LoadCellSensor):
     # detect if a data value is saturated
     def get_range(self) -> tuple[int, int]:
         return -0x800000, 0x7FFFFF
+
+    def get_channel_count(self) -> int:
+        return 1
 
     # add_client interface, direct pass through to bulk_sensor API
     def add_client(self, callback: BulkAdcDataCallback):

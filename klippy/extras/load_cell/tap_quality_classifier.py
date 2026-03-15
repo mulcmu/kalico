@@ -4,22 +4,24 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 from __future__ import annotations
+
+import logging
+import math
 from typing import Any, Optional
 
-import math, logging
 import numpy as np
 
-from extras.bed_mesh import BedMesh
-from extras.probe import ProbePointsHelper
-from gcode import GCodeCommand
 from klippy import Printer
 from klippy.configfile import ConfigWrapper, PrinterConfig
+from klippy.extras.bed_mesh import BedMesh
 from klippy.extras.load_cell.tap_analysis import (
-    TapAnalysis,
-    TapValidationError,
-    TapClassifierModule,
     ForcePoint,
+    TapAnalysis,
+    TapClassifierModule,
+    TapValidationError,
 )
+from klippy.extras.probe import ProbePointsHelper
+from klippy.gcode import GCodeCommand
 
 
 class TapQualityClassifierConfig:
@@ -99,7 +101,9 @@ class TapQualityClassifierConfig:
             raise self._printer.config_error(
                 "decompression_angle must be between 0.0 and 90.0"
             )
-        self._cfg_decompression_angle = self.decompression_angle = decompression_angle
+        self._cfg_decompression_angle = self.decompression_angle = (
+            decompression_angle
+        )
         self._save_config("decompression_angle", self.decompression_angle)
 
 
@@ -164,7 +168,7 @@ class TapQualityClassifier(TapClassifierModule):
             self._finalize_callback,
             points,
             use_offsets=True,
-            enable_horizontal_z_clearance=True
+            enable_horizontal_z_clearance=True,
         )
         points_helper.start_probe(gcmd)
         self._calibrating = False
@@ -179,7 +183,6 @@ class TapQualityClassifier(TapClassifierModule):
                 )
 
         qualities = self._recalculate_tap_qualities()
-        self._tap_analyses = []
         mean_quality = float(np.mean(qualities))
         std_quality = float(np.std(qualities))
         gcmd.respond_info(

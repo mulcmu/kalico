@@ -4,9 +4,11 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
-from .. import bulk_sensor
+
 from klippy.mcu import MCU
-from .interfaces import BulkAdcData, LoadCellSensor, BulkAdcDataCallback
+
+from .. import bulk_sensor
+from .interfaces import BulkAdcData, BulkAdcDataCallback, LoadCellSensor
 
 #
 # Constants
@@ -104,6 +106,9 @@ class HX71xBase(LoadCellSensor):
     # detect if a data value is saturated
     def get_range(self) -> tuple[int, int]:
         return -0x800000, 0x7FFFFF
+
+    def get_channel_count(self) -> int:
+        return 1
 
     # add_client interface, direct pass through to bulk_sensor API
     def add_client(self, callback: BulkAdcDataCallback):

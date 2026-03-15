@@ -63,7 +63,7 @@ serial:
 #is_non_critical: False
 #   Setting this to True will allow the mcu to be disconnected and
 #   reconnected at will without errors. Helpful for USB-accelerometer boards
-#   and USB-probes
+#   and USB/CAN-probes
 ```
 
 ### [mcu my_extra_mcu]
@@ -128,7 +128,7 @@ A collection of Kalico-specific system options
 # Logging options:
 
 #minimal_logging: False
-#   Set all log parameters log options to False. The default is False.
+#   Set the default for all log options. The default is False.
 #log_statistics: True
 #   If statistics should be logged
 #   (helpful for keeping the log clean during development)
@@ -182,6 +182,8 @@ run_current: ${constants.run_current_ab}
 run_current: ${tmc5160 stepper_x.run_current}
 #   Nested references work, but are not advised
 ```
+
+If needed, references may be escaped as `\${such}`
 
 ## Common kinematic settings
 
@@ -1553,6 +1555,9 @@ extended [G-Code command](G-Codes.md#z_tilt) becomes available.
 #   By default, the first Z movement to reach `horizontal_move_z` uses `speed`.
 #   Set `enforce_lift_speed` to True to enforce the `lift_speed`.
 #   The default is False.
+#use_adjustments: False
+#   If set to true it uses the behaviour described by trails here:
+#   https://github.com/Trails5000/klipper/commit/47b5a91f96761961e693031fa514a0025a877117
 ```
 
 #### [z_tilt_ng]
@@ -1621,6 +1626,9 @@ commands become available, enhancing bed leveling accuracy and calibration effic
 #   values yield better results, but can also lead to situations where the
 #   bed is tilted in a way that the nozzle touched the bed before the probe.
 #   The default is conservative.
+#use_adjustments: False
+#   If set to true it uses the behaviour described by trails here:
+#   https://github.com/Trails5000/klipper/commit/47b5a91f96761961e693031fa514a0025a877117
 ```
 
 ### [quad_gantry_level]
@@ -2520,7 +2528,6 @@ z_offset:
 #   - X, Y: The current toolhead position
 #⚠️ scrubbing_frequency: 0
 #   Controls how often the nozzle scrubber is used in response to bad probes.
-#   Controls how often the nozzle scrubber is used in response to bad probes.
 #   If set to a positive number, N, the nozzle_scrubber_gcode will be invoked
 #   after every Nth bad probe. 1 will run the scrubber after every bad probe.
 #   0 will disable scrubbing. The default is 0.
@@ -2858,6 +2865,35 @@ calibrate_x: ...
 #   This should be the X coordinate that positions the nozzle during the
 #   calibration process for Y axis twist compensation. This parameter must be
 #   provided and is recommended to be near the center of the bed.
+
+# The following parameters are automatically saved by SAVE_CONFIG after
+# running AXIS_TWIST_COMPENSATION_CALIBRATE and typically should not be
+# manually modified. Note: if z_compensations is set, compensation_start_x
+# and compensation_end_x must also be set. Similarly, zy_compensations
+# requires compensation_start_y and compensation_end_y.
+#z_compensations:
+#   A comma-separated list of Z offset compensation values for X-axis twist.
+#   These represent Z adjustments at evenly-spaced points from
+#   compensation_start_x to compensation_end_x. Generated automatically
+#   during X-axis calibration. Requires compensation_start_x and
+#   compensation_end_x to be set. The default is an empty list.
+#compensation_start_x:
+#   The starting X coordinate for X-axis twist compensation.
+#   Set automatically during calibration. The default is unset.
+#compensation_end_x:
+#   The ending X coordinate for X-axis twist compensation.
+#   Set automatically during calibration. The default is unset.
+#zy_compensations:
+#   A comma-separated list of Z offset compensation values for Y-axis twist.
+#   Similar to z_compensations but for the Y axis. Generated automatically
+#   during Y-axis calibration (AXIS=Y). Requires compensation_start_y and
+#   compensation_end_y to be set. The default is an empty list.
+#compensation_start_y:
+#   The starting Y coordinate for Y-axis twist compensation.
+#   Set automatically during Y-axis calibration. The default is unset.
+#compensation_end_y:
+#   The ending Y coordinate for Y-axis twist compensation.
+#   Set automatically during Y-axis calibration. The default is unset.
 ```
 
 ### ⚠️ [z_calibration]
@@ -3602,8 +3638,12 @@ sensors. This sensor can be used with extruders, heater_generic and heater beds.
 sensor_type: temperature_combined
 #sensor_list:
 #   Must be provided. List of sensors to combine to new "virtual"
-#   sensor.
-#   E.g. 'temperature_sensor sensor1,extruder,heater_bed'
+#   sensor. Each entry should be the full name of a temperature-
+#   reporting object as it appears in the config (e.g. 'extruder',
+#   'heater_bed', or 'temperature_sensor <name>' for custom sensors).
+#   E.g. 'temperature_sensor sensor1, temperature_sensor sensor2'
+#   E.g. 'extruder, heater_bed'
+#   E.g. 'temperature_sensor chamber, extruder, heater_bed'
 #combination_method:
 #   Must be provided. Combination method used for the sensor.
 #   Available options are 'max', 'min', 'mean'.
@@ -3611,6 +3651,41 @@ sensor_type: temperature_combined
 #   Must be provided. Maximum permissible deviation between the sensors
 #   to combine (e.g. 5 degrees). To disable it, use a large value (e.g. 999.9)
 ```
+
+### MPC Ambient Sensor
+
+Virtual MPC sensor to show the internal ambient temperature value (defaults to 25 if any other algorithm than MPC is used)
+
+```
+sensor_type: mpc_ambient_temperature
+heater_name: extruder
+#   Put the name of the heater this sensor is tied to (this parameter is required)
+#gcode_id: AT
+min_temp: 0
+max_temp: 325
+#ignore_limits: False
+#   Ignore the temp limits (if set to true, the min and max temp can be omitted)
+#echo_limits_to_console: False
+#   If set to true, limits will be echoed to console instead of just being ignored if ignore_limits is true
+```
+
+### MPC Block Sensor
+
+Virtual MPC sensor to show the internal ambient temperature value (defaults to 25 if any other algorithm than MPC is used)
+
+```
+sensor_type: mpc_block_temperature
+heater_name: extruder
+#   Put the name of the heater this sensor is tied to (this parameter is required)
+#gcode_id: BE
+min_temp: 0
+max_temp: 325
+#ignore_limits: False
+#   Ignore the temp limits (if set to true, the min and max temp can be omitted)
+#echo_limits_to_console: False
+#   If set to true, limits will be echoed to console instead of just being ignored if ignore_limits is true
+```
+
 
 ## Fans
 
@@ -4035,11 +4110,6 @@ PCA9632 LED support. The PCA9632 is used on the FlashForge Dreamer.
 #i2c_speed:
 #   See the "common I2C settings" section for a description of the
 #   above parameters.
-#scl_pin:
-#sda_pin:
-#   Alternatively, if the pca9632 is not connected to a hardware I2C
-#   bus, then one may specify the "clock" (scl_pin) and "data"
-#   (sda_pin) pins. The default is to use hardware I2C.
 #color_order: RGBW
 #   Set the pixel order of the LED (using a string containing the
 #   letters R, G, B, W). The default is RGBW.
@@ -4161,6 +4231,20 @@ pin:
 #maximum_mcu_duration:
 #static_value:
 #   These options are deprecated and should no longer be specified.
+```
+
+### [static_pwm_clock]
+
+Static configurable output pin (one may define any number of
+sections with an "static_pwm_clock" prefix).
+Pins configured here will be set up as clock output pins.
+Generally used to provide clock input to other hardware on the board.
+```
+[static_pwm_clock my_pin]
+pin:
+#   The pin to configure as an output. This parameter must be provided.
+#frequency: 100
+#   Target output frequency.
 ```
 
 ### [pwm_tool]
@@ -4726,10 +4810,11 @@ run_current:
 #driver_PWM_REG: 4
 #driver_PWM_LIM: 12
 #driver_SLOPE_CONTROL: 0
-#   The chip has a default value of 0, corresponding to 100V/µs.
-#   Setting this value to 2, corresponding to 400V/µs, approximately
-#   matches the TMC2209. This lowers the power dissipation at a 50kHz
-#   chopper frequency by around 1W.
+#   Controls the slew rate of the gate driver output. The chip default is 0,
+#   corresponding to 100V/µs. Setting to 2 (400V/µs) or 3 (570V/µs) can
+#   significantly reduce driver temperature (users report ~15-20°C reduction
+#   at 50kHz chopper frequency). A value of 2 matches TMC2209 slew rate.
+#   Higher values may increase EMI. See TMC2240 datasheet for details.
 #driver_SGT: 0
 #driver_SEMIN: 0
 #driver_SEUP: 0
@@ -5028,16 +5113,21 @@ prefix).
 
 ### [mcp4018]
 
-Statically configured MCP4018 digipot connected via two gpio "bit
-banging" pins (one may define any number of sections with an "mcp4018"
-prefix).
+Statically configured MCP4018 digipot connected via i2c (one may
+define any number of sections with an "mcp4018" prefix).
 
 ```
 [mcp4018 my_digipot]
-scl_pin:
-#   The SCL "clock" pin. This parameter must be provided.
-sda_pin:
-#   The SDA "data" pin. This parameter must be provided.
+#i2c_address: 47
+#   The i2c address that the chip is using on the i2c bus. The default
+#   is 47.
+#i2c_mcu:
+#i2c_bus:
+#i2c_software_scl_pin:
+#i2c_software_sda_pin:
+#i2c_speed:
+#   See the "common I2C settings" section for a description of the
+#   above parameters.
 wiper:
 #   The value to statically set the given MCP4018 "wiper" to. This is
 #   typically set to a number between 0.0 and 1.0 with 1.0 being the
@@ -5895,15 +5985,45 @@ data_ready_pin:
 #   Pin connected to the ADS131M02 data ready (DRDY) line. This parameter must
 #   be provided.
 #channel: 0
-#   Which ADC channel to read: 0 or 1. The default is 0.
+#   Comma separated channel list of channels to enable and sum. Valid channels are 0 and 1.
+#   The default is 0.
 #gain: 128
 #   Programmable gain amplifier setting. Valid values are 1, 2, 4, 8, 16, 32,
 #   64, and 128. The default is 128.
 #sample_rate: 500
 #   Sample rate in samples per second. Valid values are 250, 500, 1000, 2000,
-#   4000, 8000, 16000, and 32000. The default is 500. Higher sample rates
-#   reduce the effective number of bits (ENOB) due to the relationship between
-#   oversampling ratio and noise performance.
+#   4000, 8000, 16000, and 32000. The default is 500.
+```
+
+#### ADS131M04
+The ADS131M04 is a 24 bit, 4-channel delta-sigma ADC with simultaneous
+sampling. The MCU streams the sum of enabled channels as the primary reading
+and appends individual channel readings.
+```
+[load_cell]
+sensor_type: ads131m04
+cs_pin:
+#   The pin connected to the ADS131M04 chip select line. This parameter must
+#   be provided.
+#spi_speed: 8192000
+#   SPI bus speed. The default is 8.192 MHz.
+#spi_bus:
+#spi_software_sclk_pin:
+#spi_software_mosi_pin:
+#spi_software_miso_pin:
+#   See the "common SPI settings" section for a description of the
+#   above parameters.
+data_ready_pin:
+#   Pin connected to the ADS131M04 data ready (DRDY) line. This parameter must
+#   be provided.
+#channels: 0
+#   Comma separated channel list to enable and sum. Valid channels are: 0, 1, 2, 3. The default is channel 0.
+#gain: 128
+#   Programmable gain amplifier setting. Valid values are 1, 2, 4, 8, 16, 32,
+#   64, and 128. The same gain is applied to all channels.
+#sample_rate: 500
+#   Sample rate in samples per second. Valid values are 250, 500, 1000, 2000,
+#   4000, 8000, 16000, 32000. The default is 500.
 ```
 
 ### [load_cell_probe]
@@ -5922,8 +6042,12 @@ sensor_type:
 #   These parameters must be configured before the probe will operate.
 #   See the [load_cell] section for further details.
 #force_safety_limit: 2000
-#   The safe limit for probing force relative to the reference_tare_counts on
-#   the load_cell. The default is +/-2Kg.
+#   The safe force limit for starting a probe. This is relative to the 
+#   reference_tare_counts which is the sensor's absolute 0 force value.
+#   Set to 0 to disable. The default is +/-2Kg.
+#drift_safety_limit: 1000
+#   The maximum absolute force change allowed while probing. Set to 0 to disable.
+#   The default is +/-1Kg.
 #trigger_force: 75.0
 #   The force that the probe will trigger at. 75g is the default.
 #drift_filter_cutoff_frequency: 0.8
@@ -5955,8 +6079,13 @@ sensor_type:
 #   maximum is 3.0. Default: 2.0
 #tare_time:
 #   The time in seconds used for taring the load_cell before each probe. The
-#   default value is: 4 / 60 = 0.066. This collects samples from 4 cycles of
-#   60Hz mains power to cancel power line noise.
+#   default value is: 5 / 50 = 0.1. This collects samples from 5 cycles of
+#   50Hz / 6 cycles of 60Hz mains power to cancel power line noise.
+#disable_pullback_move: False
+#   When True, disables the pullback move and tap analysis after probe trigger.
+#   The probe will use the raw trigger position instead of the calculated Z=0
+#   from tap analysis. This reduces probe accuracy but may be useful for
+#   troubleshooting or compatibility testing. The default is False.
 #pullback_distance: 0.2
 #   The distance in mm to slowly raise the probe to perform precise Z=0
 #   measurments. This move occurs immediately after the probe detects contact.
@@ -5970,7 +6099,7 @@ sensor_type:
 #   0.1 to 1.0 mm/s. The default is set to 1 micron (0.001mm) per sensor sample.
 #tap_classifier_module:
 #   Optional module for custom tap validation. When not specified, the default
-#   SimpleTapClassifier is used. Setting a custom classifier overrides the default
+#   TapQualityClassifier is used. Setting a custom classifier overrides the default
 #   validation logic.
 #min_tap_quality: 40.0
 #   The minimum acceptable tap quality score. Valid range is 0 to 100 percent.
@@ -5982,6 +6111,11 @@ sensor_type:
 #   between 0 and 90. Can be automatically calibrated using
 #   `LOAD_CELL_PROBE_CALIBRATE CALIBRATION=DECOMPRESSION_ANGLE`.
 #   See [Decompression Angle Calibration](Load_Cell.md#decompression-angle-calibration).
+#max_approach_force_pct: 0.5
+#max_departure_force_pct: 0.25
+#max_baseline_force_delta_pct: 0.25
+#max_dwell_force_drop_pct: 0.75
+#   Maximums for tap quality checks.
 #z_offset:
 #speed:
 #samples:
@@ -5994,6 +6128,8 @@ sensor_type:
 #deactivate_gcode:
 #   See the "[probe]" section for a description of the above parameters.
 ```
+
+See [Tap Quality Components](Load_Cell.md#tap-quality-components) for more details on maximum for tap quality.
 
 ## Board specific hardware support
 
