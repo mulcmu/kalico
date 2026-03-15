@@ -1035,9 +1035,12 @@ class DriftFilterCalibration:
             self._max_z_position = zconfig.getfloat(
                 "position_max", None, note_valid=False
             )
-        if self._max_z_position is None:
-            raise config.error("Printer has no configured maximum z-position")
         pconfig = config.getsection("printer")
+        self._max_z_position = pconfig.getfloat(
+            "maximum_z_position", default=self._max_z_position, note_valid=False
+        )
+        # if self._max_z_position is None:
+        #     raise config.error("Printer has no configured maximum z-position")
         self._max_z_velocity: float = pconfig.getfloat(
             "max_z_velocity", None, note_valid=False
         )
