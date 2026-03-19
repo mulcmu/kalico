@@ -666,7 +666,7 @@ class LoadCellPrimitives:
         tare_counts_per_channel = self._load_cell.avg_counts_from_samples(
             tare_samples
         )
-        self._config_helper.assert_force_safety_limit(tare_counts, gcmd)
+        self._config_helper.assert_force_safety_limit(sum(tare_counts_per_channel), gcmd)
         # update sos_filter with any gcode parameter changes
         self._continuous_tare_filter_helper.update_from_command(gcmd)
         self._mcu_load_cell_probe.set_endstop_range(
