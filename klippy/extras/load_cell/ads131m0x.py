@@ -1,15 +1,22 @@
 # ADS131Mx Support
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+#
+# ADS131M0x Chip Documentation:
+# ADS131M02 - https://www.ti.com/lit/ds/symlink/ads131m02.pdf
+# ADS131M04 - https://www.ti.com/lit/ds/symlink/ads131m04.pdf
 import logging
+from typing import Dict
 
 from klippy import ConfigWrapper, Printer
 from klippy.extras import bus
 from klippy.extras.bulk_sensor import BatchBulkHelper, FixedFreqReader
+from klippy.extras.bus import MCU_SPI
 from klippy.extras.load_cell.interfaces import (
     BulkAdcDataCallback,
     LoadCellSensor,
 )
+from klippy.mcu import MCU
 from klippy.pins import PrinterPins
 from klippy.reactor import Reactor
 
@@ -24,7 +31,7 @@ WREG_CMD = 0b011 << 13
 STATUS_REG = 0x01
 MODE_REG = 0x02
 CLOCK_REG = 0x03
-GAIN_REG = 0x04
+GAIN1_REG = 0x04
 PWR_HR = 0b10  # High resolution mode
 STATUS_RESET_BIT = 1 << 10  # RESET bit in STATUS register
 # Error codes from MCU (match sensor_ads131m02.c)
@@ -35,10 +42,6 @@ ADC_FACTOR = 1.0 / (1 << 23)
 
 def hexify(byte_array):
     return "[%s]" % (", ".join([hex(b) for b in byte_array]))
-
-
-# Chip Documentation: https://www.ti.com/lit/ds/symlink/ads131m02.pdf
-#                     https://www.ti.com/lit/ds/symlink/ads131m04.pdf
 
 
 def channels_to_mask(channels):
@@ -52,19 +55,19 @@ class ADS131MxBase(LoadCellSensor):
     def __init__(
         self,
         config: ConfigWrapper,
-        sensor_type,
-        sample_rate_options,
-        default_sample_rate,
-        channel_count,
+        sensor_type: str,
+        sample_rate_options: Dict[int, int],
+        default_sample_rate: int,
+        channel_count: int,
     ):
         self.printer: Printer = config.get_printer()
         self.reactor: Reactor = self.printer.get_reactor()
-        self.name = config.get_name().split()[-1]
-        self.sensor_type = sensor_type
-        self.channel_count = channel_count
-        self.last_error_count = 0
-        self.consecutive_fails = 0
-        self.sps = config.getchoice(
+        self.name: str = config.get_name().split()[-1]
+        self.sensor_type: str = sensor_type
+        self.channel_count: int = channel_count
+        self.last_error_count: int = 0
+        self.consecutive_fails: int = 0
+        self.sps: int = config.getchoice(
             "sample_rate",
             sample_rate_options,
             default=default_sample_rate,
@@ -79,9 +82,12 @@ class ADS131MxBase(LoadCellSensor):
             64: 6,
             128: 7,
         }
-        self.gain = config.getchoice("gain", gain_options, default=128)
-        self.spi = bus.MCU_SPI_from_config(config, 1, default_speed=8192000)
-        self.mcu = mcu = self.spi.get_mcu()
+        self.gain: int = config.getchoice("gain", gain_options, default=128)
+        self.spi: MCU_SPI = bus.MCU_SPI_from_config(
+            config, 1, default_speed=8192000
+        )
+        mcu: MCU = self.spi.get_mcu()
+        self.mcu: MCU = mcu
         self.oid = mcu.create_oid()
         # Data Ready (DRDY) Pin
         drdy_pin: str = config.get("data_ready_pin")
@@ -94,11 +100,10 @@ class ADS131MxBase(LoadCellSensor):
                 "data_ready_pin must be on the same MCU"
             )
         self.channels = self._read_channels(config)
-        self.output_channel_count = len(self.channels)
         self.channel_mask = channels_to_mask(self.channels)
         # Bulk Sensor Setup
         chip_smooth = self.sps * UPDATE_INTERVAL * 2
-        self.unpack_format = "<" + ("i" * self.output_channel_count)
+        self.unpack_format = "<" + ("i" * len(self.channels))
         self.ffreader: FixedFreqReader = FixedFreqReader(
             mcu, chip_smooth, self.unpack_format
         )
@@ -118,7 +123,7 @@ class ADS131MxBase(LoadCellSensor):
         self.mcu.add_config_cmd(
             f"config_ads131m0x oid={self.oid} spi_oid={self.spi.get_oid()} "
             f"data_ready_pin={self.data_ready_pin} "
-            f"total_channels={self.channel_count} "
+            f"sensor_channel_count={self.channel_count} "
             f"channel_mask={self.channel_mask}"
         )
         self.mcu.add_config_cmd(
@@ -161,7 +166,7 @@ class ADS131MxBase(LoadCellSensor):
         return -0x800000, 0x7FFFFF
 
     def get_channel_count(self):
-        return self.output_channel_count
+        return len(self.channels)
 
     def add_client(self, callback: BulkAdcDataCallback):
         self.batch_bulk.add_client(callback)
@@ -231,21 +236,21 @@ class ADS131MxBase(LoadCellSensor):
 
     def _send_command(self, cmd_16bit):
         """Send a frame of 16-bit values as 24-bit words."""
-        self.spi.spi_send(
-            self._to_words(cmd_16bit, NULL_CMD, NULL_CMD, NULL_CMD)
-        )
+        words = [cmd_16bit] + [NULL_CMD] * (1 + self.channel_count)
+        self.spi.spi_send_wait_ack(self._to_words(*words))
 
     def _transfer_frame(self, *values_16bit):
         """Send frame and return response as list of 16-bit values."""
         # send 2 frames (8x24 bits), the response is in the second frame
-        target_size = 2 * 4 * WORD_SIZE
+        msg_words = 2 + self.channel_count
+        frame_size = 2 * msg_words * WORD_SIZE
         transfer_words = self._to_words(*values_16bit)
         # pad to target size with 0's
-        while len(transfer_words) < target_size:
+        while len(transfer_words) < frame_size:
             transfer_words.extend(self._to_words(NULL_CMD))
         params = self.spi.spi_transfer(transfer_words)
         resp = params.get("response", [])
-        logging.info("%s transfer response: %s", self.sensor_type, hexify(resp))
+        # logging.info("%s transfer response: %s", self.sensor_type, hexify(resp))
         result = []
         for i in range(0, len(resp), 3):
             if i + 1 < len(resp):
@@ -266,13 +271,14 @@ class ADS131MxBase(LoadCellSensor):
         return self._build_register_command(RREG_CMD, addr, count)
 
     def _read_reg(self, addr):
+        msg_words = 2 + self.channel_count
         resp = self._transfer_frame(self._rreg_cmd(addr))
-        if len(resp) < 5:
+        if len(resp) < msg_words + 1:
             raise self.printer.command_error(
                 f"{self.sensor_type} {self.name}: no response reading reg "
                 f"0x{addr:02x}"
             )
-        return resp[4]
+        return resp[msg_words]
 
     def _write_reg(self, addr, value):
         """Write a single register."""
@@ -288,11 +294,15 @@ class ADS131MxBase(LoadCellSensor):
                 f"failed: wrote 0x{value:04x}, read 0x{actual:04x}"
             )
 
+    def _delay(self, milliseconds: float):
+        self.reactor.pause(self.reactor.monotonic() + milliseconds / 1000.0)
+
     def reset_chip(self):
         self._send_command(RESET_CMD)
-        self.reactor.pause(self.reactor.monotonic() + 0.020)
-        self._send_command(NULL_CMD)
-        self.reactor.pause(self.reactor.monotonic() + 0.002)
+        self._delay(20.0)
+        self.reactor.pause(self.reactor.monotonic())
+        self._delay(20.0)
+        self.reactor.pause(self.reactor.monotonic())
         status = self._read_reg(STATUS_REG)
         logging.info(
             "%s %s: reset complete, STATUS=0x%04x",
@@ -342,8 +352,8 @@ class ADS131MxBase(LoadCellSensor):
         clock_val = channel_enable | (osr_code << 2) | PWR_HR
         self._write_and_verify_reg(CLOCK_REG, clock_val)
         # GAIN register (0x04): PGAGAIN0[2:0] at bits 2:0, PGAGAIN1[2:0] at bits 6:4
-        self._write_and_verify_reg(GAIN_REG, self._gain_register_value())
-        self.reactor.pause(self.reactor.monotonic() + 0.050)  # 50ms delay
+        self._write_and_verify_reg(GAIN1_REG, self._gain_register_value())
+        self._delay(50.0)
         status = self._read_reg(STATUS_REG)
         logging.info(
             "ADS131M0X %s: post-WAKEUP STATUS=0x%04x", self.name, status

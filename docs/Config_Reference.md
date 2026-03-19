@@ -5964,8 +5964,8 @@ data_ready_pin:
 ```
 
 #### ADS131M02
-The ADS131M02 is a 24 bit, 2-channel delta-sigma ADC supporting sample rates up
-to 32Khz. It uses SPI communication and provides high precision measurements
+The ADS131M02 is a 24 bit, 2-channel delta-sigma ADC with simultaneous
+sampling. It uses SPI communication and provides high precision measurements
 suitable for load cell probing.
 ```
 [load_cell]
@@ -5984,7 +5984,7 @@ cs_pin:
 data_ready_pin:
 #   Pin connected to the ADS131M02 data ready (DRDY) line. This parameter must
 #   be provided.
-#channel: 0
+#channels: 0
 #   Comma separated channel list of channels to enable and sum. Valid channels are 0 and 1.
 #   The default is 0.
 #gain: 128
@@ -5997,8 +5997,9 @@ data_ready_pin:
 
 #### ADS131M04
 The ADS131M04 is a 24 bit, 4-channel delta-sigma ADC with simultaneous
-sampling. The MCU streams the sum of enabled channels as the primary reading
-and appends individual channel readings.
+sampling. It uses SPI communication and provides high precision measurements
+suitable for load cell probing. Up to 4 channels can be combined into a single
+sensor ideal for under bed load cells.
 ```
 [load_cell]
 sensor_type: ads131m04
