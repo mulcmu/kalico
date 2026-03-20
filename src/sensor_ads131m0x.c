@@ -40,7 +40,6 @@ struct ads131m0x_adc {
 #define MAX_FRAME_SIZE       (2 + MAX_ADC_CHANNELS) * SENSOR_WORD_SIZE
 // Bit 10 of 16-bit status, in byte 0 (bits 15:8)
 #define STATUS_RESET_BIT     (1 << 2)
-#define CRC_INITIAL          0xFFFF
 // CCITT polynomial: x^16 + x^12 + x^5 + 1
 #define CRC_POLY             0x1021
 
@@ -61,19 +60,13 @@ buffer_append_int32(struct sensor_bulk *sb, int32_t val)
  * ads131m0x sensor support
  ****************************************************************/
 
-// Calculate CCITT CRC-16 over data bytes
 static uint16_t
-calc_crc16(uint8_t *data, uint8_t len)
-{
-    uint16_t crc = CRC_INITIAL;
-    for (uint8_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (uint8_t j = 0; j < 8; j++) {
-            if (crc & 0x8000)
-                crc = (crc << 1) ^ CRC_POLY;
-            else
-                crc <<= 1;
-        }
+calc_crc16(uint8_t *data, uint8_t len) {
+    uint16_t crc = 0xFFFF;
+    while (len--) {
+        uint8_t x = (crc >> 8) ^ *data++;
+        x ^= x >> 4;
+        crc = (crc << 8) ^ ((uint16_t)x << 12) ^ ((uint16_t)x << 5) ^ (uint16_t)x;
     }
     return crc;
 }

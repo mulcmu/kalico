@@ -294,15 +294,9 @@ class ADS131MxBase(LoadCellSensor):
                 f"failed: wrote 0x{value:04x}, read 0x{actual:04x}"
             )
 
-    def _delay(self, milliseconds: float):
-        self.reactor.pause(self.reactor.monotonic() + milliseconds / 1000.0)
-
     def reset_chip(self):
         self._send_command(RESET_CMD)
-        self._delay(20.0)
-        self.reactor.pause(self.reactor.monotonic())
-        self._delay(20.0)
-        self.reactor.pause(self.reactor.monotonic())
+        self.reactor.delay_for_ms(20.0)
         status = self._read_reg(STATUS_REG)
         logging.info(
             "%s %s: reset complete, STATUS=0x%04x",
@@ -353,7 +347,7 @@ class ADS131MxBase(LoadCellSensor):
         self._write_and_verify_reg(CLOCK_REG, clock_val)
         # GAIN register (0x04): PGAGAIN0[2:0] at bits 2:0, PGAGAIN1[2:0] at bits 6:4
         self._write_and_verify_reg(GAIN1_REG, self._gain_register_value())
-        self._delay(50.0)
+        self.reactor.delay_for_ms(50.0)
         status = self._read_reg(STATUS_REG)
         logging.info(
             "ADS131M0X %s: post-WAKEUP STATUS=0x%04x", self.name, status
