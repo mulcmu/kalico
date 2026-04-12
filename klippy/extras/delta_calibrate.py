@@ -35,18 +35,33 @@ MeasureRidgeRadius = 5.0 - 0.5
 # How much to prefer a distance measurement over a height measurement
 MEASURE_WEIGHT = 0.5
 
-HexagonProbePattern_39points= [(0.31111, 0.48497), (-0.31111, 0.0), (0.15556, 0.24249), (-0.46667, 0.72746), (-0.46667, -0.72746), (0.62222, 0.0), (0.15556, -0.24249), (-0.62222, 0.0), (0.0, -0.48497), (0.0, 0.96995), (-0.15556, 0.24249), (0.77778, 0.24249), (0.77778, -0.24249), (0.0, 0.48497), (0.0, -0.96995), (0.46667, 0.72746), (-0.15556, -0.24249), (0.46667, -0.72746), (-0.31111, -0.48497), (0.31111, 0.0), (-0.46667, 0.24249), (0.15556, 0.72746), (-0.46667, -0.24249), (-0.31111, 0.48497), (-0.93333, 0.0), (0.62222, -0.48497), (0.15556, -0.72746), (0.62222, 0.48497), (-0.62222, -0.48497), (-0.62222, 0.48497), (0.0, 0.0), (0.46667, 0.24249), (0.31111, -0.48497), (-0.15556, 0.72746), (-0.15556, -0.72746), (0.93333, 0.0), (0.46667, -0.24249), (-0.77778, 0.24249), (-0.77778, -0.24249)]
+# Equilateral triangular lattice: edge length s=0.31111, row spacing s*sqrt(3)/2=0.26943.
+# All 90 edges are equal length. 37 points fit within the unit circle.
+HexagonProbePattern_37points = [
+    (-0.93333,  0.0    ), (-0.77777, -0.26943), (-0.77777,  0.26943),
+    (-0.62222, -0.53886), (-0.62222,  0.0    ), (-0.62222,  0.53886),
+    (-0.46666, -0.80829), (-0.46666, -0.26943), (-0.46666,  0.26943), (-0.46666,  0.80829),
+    (-0.31111, -0.53886), (-0.31111,  0.0    ), (-0.31111,  0.53886),
+    (-0.15555, -0.80829), (-0.15555, -0.26943), (-0.15555,  0.26943), (-0.15555,  0.80829),
+    ( 0.0,     -0.53886), ( 0.0,      0.0    ), ( 0.0,      0.53886),
+    ( 0.15555, -0.80829), ( 0.15555, -0.26943), ( 0.15555,  0.26943), ( 0.15555,  0.80829),
+    ( 0.31111, -0.53886), ( 0.31111,  0.0    ), ( 0.31111,  0.53886),
+    ( 0.46666, -0.80829), ( 0.46666, -0.26943), ( 0.46666,  0.26943), ( 0.46666,  0.80829),
+    ( 0.62222, -0.53886), ( 0.62222,  0.0    ), ( 0.62222,  0.53886),
+    ( 0.77777, -0.26943), ( 0.77777,  0.26943),
+    ( 0.93333,  0.0    ),
+]
 
 # Adjacency edges for the hex grid: pairs of point indices (i, j) with i < j
-# that are connected by one of the 6 hex step vectors in normalized coordinates.
+# that are connected by one of the 6 equilateral hex step vectors in normalized coordinates.
 def _compute_hex_edges(pts):
     _step_vectors = [
         ( 0.31111,  0.0    ),
         (-0.31111,  0.0    ),
-        ( 0.15556,  0.24249),
-        (-0.15556,  0.24249),
-        ( 0.15556, -0.24249),
-        (-0.15556, -0.24249),
+        ( 0.15556,  0.26943),
+        (-0.15556,  0.26943),
+        ( 0.15556, -0.26943),
+        (-0.15556, -0.26943),
     ]
     _tol = 1e-3
     edges = []
@@ -60,8 +75,8 @@ def _compute_hex_edges(pts):
                     break
     return edges
 
-HexagonProbePattern_39edges = _compute_hex_edges(HexagonProbePattern_39points)
-logging.info("delta_calibrate: hex grid edge count = %d", len(HexagonProbePattern_39edges))
+HexagonProbePattern_37edges = _compute_hex_edges(HexagonProbePattern_37points)
+logging.info("delta_calibrate: hex grid edge count = %d", len(HexagonProbePattern_37edges))
 
 # Convert distance measurements made on the calibration object to
 # 3-tuples of (actual_distance, stable_position1, stable_position2)
@@ -127,7 +142,7 @@ class DeltaCalibrate:
         )
         # Calculate default probing points
         radius = config.getfloat("radius", above=0.0)
-        points = [(x * radius, y * radius) for x, y in HexagonProbePattern_39points]
+        points = [(x * radius, y * radius) for x, y in HexagonProbePattern_37points]
         self.original_probe_points = list(points)
 
         # Multi-round probe state (reset at the start of each DELTA_CALIBRATE run)
@@ -250,7 +265,7 @@ class DeltaCalibrate:
             for result_idx, orig_idx in enumerate(self.round_shuffled_indices)
         }
         # Compute and accumulate distances for every hex edge in this round
-        for i, j in HexagonProbePattern_39edges:
+        for i, j in HexagonProbePattern_37edges:
             ri = inverse_map[i]
             rj = inverse_map[j]
             pi = positions[ri]
