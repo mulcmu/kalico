@@ -5,6 +5,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
 import math
+import random
 
 from klippy import mathutil
 
@@ -35,6 +36,32 @@ MeasureRidgeRadius = 5.0 - 0.5
 MEASURE_WEIGHT = 0.5
 
 HexagonProbePattern_39points= [(0.31111, 0.48497), (-0.31111, 0.0), (0.15556, 0.24249), (-0.46667, 0.72746), (-0.46667, -0.72746), (0.62222, 0.0), (0.15556, -0.24249), (-0.62222, 0.0), (0.0, -0.48497), (0.0, 0.96995), (-0.15556, 0.24249), (0.77778, 0.24249), (0.77778, -0.24249), (0.0, 0.48497), (0.0, -0.96995), (0.46667, 0.72746), (-0.15556, -0.24249), (0.46667, -0.72746), (-0.31111, -0.48497), (0.31111, 0.0), (-0.46667, 0.24249), (0.15556, 0.72746), (-0.46667, -0.24249), (-0.31111, 0.48497), (-0.93333, 0.0), (0.62222, -0.48497), (0.15556, -0.72746), (0.62222, 0.48497), (-0.62222, -0.48497), (-0.62222, 0.48497), (0.0, 0.0), (0.46667, 0.24249), (0.31111, -0.48497), (-0.15556, 0.72746), (-0.15556, -0.72746), (0.93333, 0.0), (0.46667, -0.24249), (-0.77778, 0.24249), (-0.77778, -0.24249)]
+
+# Adjacency edges for the hex grid: pairs of point indices (i, j) with i < j
+# that are connected by one of the 6 hex step vectors in normalized coordinates.
+def _compute_hex_edges(pts):
+    _step_vectors = [
+        ( 0.31111,  0.0    ),
+        (-0.31111,  0.0    ),
+        ( 0.15556,  0.24249),
+        (-0.15556,  0.24249),
+        ( 0.15556, -0.24249),
+        (-0.15556, -0.24249),
+    ]
+    _tol = 1e-3
+    edges = []
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            dx = pts[j][0] - pts[i][0]
+            dy = pts[j][1] - pts[i][1]
+            for svx, svy in _step_vectors:
+                if abs(dx - svx) < _tol and abs(dy - svy) < _tol:
+                    edges.append((i, j))
+                    break
+    return edges
+
+HexagonProbePattern_39edges = _compute_hex_edges(HexagonProbePattern_39points)
+logging.info("delta_calibrate: hex grid edge count = %d", len(HexagonProbePattern_39edges))
 
 # Convert distance measurements made on the calibration object to
 # 3-tuples of (actual_distance, stable_position1, stable_position2)
@@ -101,12 +128,21 @@ class DeltaCalibrate:
         # Calculate default probing points
         radius = config.getfloat("radius", above=0.0)
         points = [(x * radius, y * radius) for x, y in HexagonProbePattern_39points]
+        self.original_probe_points = list(points)
+
+        # Multi-round probe state (reset at the start of each DELTA_CALIBRATE run)
+        self.probe_round = 0
+        self.all_probe_positions = []
+        self.all_distances = []
+        self.round_shuffled_indices = []
+
         # points = [(0.0, 0.0)]
         # scatter = [0.95, 0.90, 0.85, 0.70, 0.75, 0.80]
         # for i in range(6):
         #     r = math.radians(90.0 + 60.0 * i)
         #     dist = radius * scatter[i]
         #     points.append((math.cos(r) * dist, math.sin(r) * dist))
+
         self.probe_helper = probe.ProbePointsHelper(
             config, self.probe_finalize, default_points=points
         )
@@ -194,15 +230,52 @@ class DeltaCalibrate:
             )
 
     def probe_finalize(self, offsets, positions):
-        # Convert positions into (z_offset, stable_position) pairs
+        # Convert this round's positions into (z_offset, stable_position) pairs
         z_offset = offsets[2]
         kin = self.printer.lookup_object("toolhead").get_kinematics()
         delta_params = kin.get_calibration()
-        probe_positions = [
+        round_probe_positions = [
             (z_offset, delta_params.calc_stable_position(p)) for p in positions
         ]
-        # Perform analysis
-        self.calculate_params(probe_positions, self.last_distances)
+        logging.info(
+            "delta_calibrate round %d/3 complete, shuffled indices: %s",
+            self.probe_round + 1,
+            self.round_shuffled_indices,
+        )
+        # Accumulate height positions across all rounds
+        self.all_probe_positions.extend(round_probe_positions)
+        # Build inverse map: original point index -> index in this round's results
+        inverse_map = {
+            orig_idx: result_idx
+            for result_idx, orig_idx in enumerate(self.round_shuffled_indices)
+        }
+        # Compute and accumulate distances for every hex edge in this round
+        for i, j in HexagonProbePattern_39edges:
+            ri = inverse_map[i]
+            rj = inverse_map[j]
+            pi = positions[ri]
+            pj = positions[rj]
+            dist = math.sqrt(
+                (pi[0] - pj[0]) ** 2
+                + (pi[1] - pj[1]) ** 2
+                + (pi[2] - pj[2]) ** 2
+            )
+            self.all_distances.append(
+                (dist, round_probe_positions[ri][1], round_probe_positions[rj][1])
+            )
+        self.probe_round += 1
+        if self.probe_round < 3:
+            # Prepare a new shuffled order for the next round
+            shuffled = list(range(len(self.original_probe_points)))
+            random.shuffle(shuffled)
+            self.round_shuffled_indices = shuffled
+            self.probe_helper.probe_points = [
+                self.original_probe_points[i] for i in shuffled
+            ]
+            return "retry"
+        # All 3 rounds done — update in-memory probe positions and run calibration
+        self.last_probe_positions = self.all_probe_positions
+        self.calculate_params(self.all_probe_positions, self.all_distances)
 
     def calculate_params(self, probe_positions, distances):
         height_positions = self.manual_heights + probe_positions
@@ -285,6 +358,17 @@ class DeltaCalibrate:
     cmd_DELTA_CALIBRATE_help = "Delta calibration script"
 
     def cmd_DELTA_CALIBRATE(self, gcmd):
+        # Reset multi-round state for a fresh calibration run
+        self.probe_round = 0
+        self.all_probe_positions = []
+        self.all_distances = []
+        # Shuffle probe order for round 0
+        shuffled = list(range(len(self.original_probe_points)))
+        random.shuffle(shuffled)
+        self.round_shuffled_indices = shuffled
+        self.probe_helper.probe_points = [
+            self.original_probe_points[i] for i in shuffled
+        ]
         self.probe_helper.start_probe(gcmd)
 
     def add_manual_height(self, height):
