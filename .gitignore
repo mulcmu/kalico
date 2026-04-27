@@ -23,3 +23,5 @@ site/
 env/
 venv/
 mkdocs-env/
+klippy/extras/delta_distances.py
+klippy/extras/37pt sample.jpg

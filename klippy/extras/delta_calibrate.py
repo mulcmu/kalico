@@ -34,56 +34,63 @@ MeasureRidgeRadius = 5.0 - 0.5
 # How much to prefer a distance measurement over a height measurement
 MEASURE_WEIGHT = 0.5
 
-# Tower-spoke pattern – 79 points.
-# Six mid-tower spokes (0°/60°/120°/180°/240°/300°) with 8 evenly-spaced radii
-# each (r = 1/8 … 8/8 of probe_radius) provide dense radial sampling between
-# towers where tower-angle and arm-length errors produce the largest Z signal.
-# Six tower-aligned spokes (30°/90°/150°/210°/270°/330°) with 5 radii each
-# (r = 1/5 … 5/5) give direct per-tower sensitivity for endstop and arm-length
-# isolation.  One center point anchors the height reference.
-# All coordinates are normalised to probe_radius = 1.
-TowerSpokeProbePattern_79points = [
-    # center
-    (0.0, 0.0),
-    # mid-tower spoke  0deg (toward +X, between Tower-B and Tower-C)
-    (0.125, 0.0), (0.25, 0.0), (0.375, 0.0), (0.5, 0.0),
-    (0.625, 0.0), (0.75, 0.0), (0.875, 0.0), (1.0, 0.0),
-    # mid-tower spoke  60deg
-    (0.0625, 0.108253), (0.125, 0.216506), (0.1875, 0.32476),
-    (0.25, 0.433013), (0.3125, 0.541266), (0.375, 0.649519),
-    (0.4375, 0.757772), (0.5, 0.866025),
-    # mid-tower spoke 120deg
-    (-0.0625, 0.108253), (-0.125, 0.216506), (-0.1875, 0.32476),
-    (-0.25, 0.433013), (-0.3125, 0.541266), (-0.375, 0.649519),
-    (-0.4375, 0.757772), (-0.5, 0.866025),
-    # mid-tower spoke 180deg (toward -X)
-    (-0.125, 0.0), (-0.25, 0.0), (-0.375, 0.0), (-0.5, 0.0),
-    (-0.625, 0.0), (-0.75, 0.0), (-0.875, 0.0), (-1.0, 0.0),
-    # mid-tower spoke 240deg
-    (-0.0625, -0.108253), (-0.125, -0.216506), (-0.1875, -0.32476),
-    (-0.25, -0.433013), (-0.3125, -0.541266), (-0.375, -0.649519),
-    (-0.4375, -0.757772), (-0.5, -0.866025),
-    # mid-tower spoke 300deg
-    (0.0625, -0.108253), (0.125, -0.216506), (0.1875, -0.32476),
-    (0.25, -0.433013), (0.3125, -0.541266), (0.375, -0.649519),
-    (0.4375, -0.757772), (0.5, -0.866025),
-    # tower-aligned spoke  30deg (Tower-B direction)
-    (0.17321, 0.1), (0.34641, 0.2), (0.519615, 0.3),
-    (0.69282, 0.4), (0.866025, 0.5),
-    # tower-aligned spoke  90deg (Tower-C direction)
-    (0.0, 0.2), (0.0, 0.4), (0.0, 0.6), (0.0, 0.8), (0.0, 1.0),
-    # tower-aligned spoke 150deg (Tower-A direction)
-    (-0.17321, 0.1), (-0.34641, 0.2), (-0.519615, 0.3),
-    (-0.69282, 0.4), (-0.866025, 0.5),
-    # tower-aligned spoke 210deg
-    (-0.17321, -0.1), (-0.34641, -0.2), (-0.519615, -0.3),
-    (-0.69282, -0.4), (-0.866025, -0.5),
-    # tower-aligned spoke 270deg
-    (0.0, -0.2), (0.0, -0.4), (0.0, -0.6), (0.0, -0.8), (0.0, -1.0),
-    # tower-aligned spoke 330deg
-    (0.17321, -0.1), (0.34641, -0.2), (0.519615, -0.3),
-    (0.69282, -0.4), (0.866025, -0.5),
-]
+# ---------------------------------------------------------------------------
+# Hexagonal (triangular lattice) probe pattern generator
+# ---------------------------------------------------------------------------
+#
+# HEX_DENSITY: even integer specifying the number of equilateral triangle
+# edges along the x-axis.  The x-axis row has HEX_DENSITY+1 probe points.
+# Total probe count = 3*(HEX_DENSITY//2)**2 + 3*(HEX_DENSITY//2) + 1.
+#
+# Common values:
+#   HEX_DENSITY= 6  → n=3 → 37 points
+#   HEX_DENSITY= 8  → n=4 → 61 points
+#   HEX_DENSITY=10  → n=5 → 91 points
+#   HEX_DENSITY=12  → n=6 → 127 points
+#   HEX_DENSITY=14  → n=7 → 169 points
+#
+# Must be a positive even integer producing fewer than 1000 probe points
+# (maximum: HEX_DENSITY=34 → 919 points).
+HEX_DENSITY = 24 
+
+def generate_hexagonal_probe_pattern(hex_density):
+    """Generate a triangular-lattice hexagonal probe pattern.
+
+    hex_density: even integer giving the number of triangle edges along the
+                 x-axis.  The x-axis row has hex_density+1 probe points.
+
+    Returns a list of (x, y) tuples normalised to probe_radius = 1.
+    The outermost hex vertices lie at radius 14/15 ≈ 0.9333, matching the
+    prior 37-point test pattern.  Points are ordered row by row (bottom
+    to top, left to right within each row) using axial hex coordinates.
+
+    Point count = 3*(hex_density//2)**2 + 3*(hex_density//2) + 1.
+    Raises ValueError if hex_density is not a positive even integer or if
+    the resulting point count would reach or exceed 1000.
+    """
+    if hex_density % 2 != 0 or hex_density < 2:
+        raise ValueError(
+            "hex_density must be a positive even integer, got %d" % hex_density)
+    n = hex_density // 2
+    n_pts = 3 * n * n + 3 * n + 1
+    if n_pts >= 1000:
+        raise ValueError(
+            "hex_density=%d would generate %d probe points; limit is <1000"
+            % (hex_density, n_pts))
+    # Step sizes normalised so outer hex vertices sit at radius 14/15 ≈ 0.9333
+    outer_radius = 14.0 / 15.0
+    s_x = outer_radius / n
+    s_y = s_x * math.sqrt(3.0) / 2.0
+    # Enumerate lattice points using axial coordinates (q, r):
+    #   x = s_x * (q + r/2),  y = s_y * r
+    # Valid region: max(|q|, |r|, |q+r|) <= n
+    points = []
+    for r in range(-n, n + 1):
+        q_min = max(-n, -n - r)
+        q_max = min(n, n - r)
+        for q in range(q_min, q_max + 1):
+            points.append((s_x * (q + r * 0.5), s_y * r))
+    return points
 
 # Convert distance measurements made on the calibration object to
 # 3-tuples of (actual_distance, stable_position1, stable_position2)
@@ -149,7 +156,9 @@ class DeltaCalibrate:
         )
         # Calculate default probing points
         radius = config.getfloat("radius", above=0.0)
-        points = [(x * radius, y * radius) for x, y in TowerSpokeProbePattern_79points]
+        
+        _hex_pts = generate_hexagonal_probe_pattern(HEX_DENSITY)
+        points = [(x * radius, y * radius) for x, y in _hex_pts]
 
         # points = [(0.0, 0.0)]
         # scatter = [0.95, 0.90, 0.85, 0.70, 0.75, 0.80]
