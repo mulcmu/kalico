@@ -39,32 +39,39 @@ MEASURE_WEIGHT = 0.5
 # ---------------------------------------------------------------------------
 #
 # HEX_DENSITY: even integer specifying the number of equilateral triangle
-# edges along the x-axis.  The x-axis row has HEX_DENSITY+1 probe points.
-# Total probe count = 3*(HEX_DENSITY//2)**2 + 3*(HEX_DENSITY//2) + 1.
+# edges along the x-axis.  Lattice spacing = probe_radius / (HEX_DENSITY//2).
+# All lattice points within probe_radius are included, filling the complete
+# probe circle (not just the inscribed hexagon).
 #
-# Common values:
-#   HEX_DENSITY= 6  → n=3 → 37 points
-#   HEX_DENSITY= 8  → n=4 → 61 points
-#   HEX_DENSITY=10  → n=5 → 91 points
+# Common values (point counts with circular fill):
+#   HEX_DENSITY= 6  → n=3 →  37 points
+#   HEX_DENSITY= 8  → n=4 →  61 points
+#   HEX_DENSITY=10  → n=5 →  91 points
 #   HEX_DENSITY=12  → n=6 → 127 points
-#   HEX_DENSITY=14  → n=7 → 169 points
+#   HEX_DENSITY=14  → n=7 → 187 points
+#   HEX_DENSITY=16  → n=8 → 241 points
+#   HEX_DENSITY=18  → n=9 → 301 points
+#   HEX_DENSITY=20  → n=10 → 367 points
+#   HEX_DENSITY=22  → n=11 → 439 points
+#   HEX_DENSITY=24  → n=12 → 517 points
 #
-# Must be a positive even integer producing fewer than 1000 probe points
-# (maximum: HEX_DENSITY=34 → 919 points).
-HEX_DENSITY = 24 
+# Must be a positive even integer producing fewer than 1000 probe points.
+HEX_DENSITY = 24
 
 def generate_hexagonal_probe_pattern(hex_density):
-    """Generate a triangular-lattice hexagonal probe pattern.
+    """Generate a triangular-lattice probe pattern filling the probe circle.
 
     hex_density: even integer giving the number of triangle edges along the
-                 x-axis.  The x-axis row has hex_density+1 probe points.
+                 x-axis.  Lattice spacing = probe_radius / (hex_density // 2).
 
     Returns a list of (x, y) tuples normalised to probe_radius = 1.
-    The outermost hex vertices lie at radius 14/15 ≈ 0.9333, matching the
-    prior 37-point test pattern.  Points are ordered row by row (bottom
-    to top, left to right within each row) using axial hex coordinates.
+    All lattice points within radius 1.0 are included, filling the complete
+    probe circle.  This includes the six circular segments beyond the hex
+    flat sides (which lie at cos(30 deg) ~= 0.866 * probe_radius in the
+    hexagonal boundary) out to the full probe radius.
+    Points are ordered row by row (bottom to top, left to right within each
+    row) using axial hex coordinates.
 
-    Point count = 3*(hex_density//2)**2 + 3*(hex_density//2) + 1.
     Raises ValueError if hex_density is not a positive even integer or if
     the resulting point count would reach or exceed 1000.
     """
@@ -72,24 +79,23 @@ def generate_hexagonal_probe_pattern(hex_density):
         raise ValueError(
             "hex_density must be a positive even integer, got %d" % hex_density)
     n = hex_density // 2
-    n_pts = 3 * n * n + 3 * n + 1
-    if n_pts >= 1000:
-        raise ValueError(
-            "hex_density=%d would generate %d probe points; limit is <1000"
-            % (hex_density, n_pts))
-    # Step sizes normalised so outer hex vertices sit at radius 14/15 ≈ 0.9333
-    outer_radius = 14.0 / 15.0
-    s_x = outer_radius / n
+    s_x = 1.0 / n
     s_y = s_x * math.sqrt(3.0) / 2.0
     # Enumerate lattice points using axial coordinates (q, r):
     #   x = s_x * (q + r/2),  y = s_y * r
-    # Valid region: max(|q|, |r|, |q+r|) <= n
+    # Include all points with x^2 + y^2 <= 1 (full probe circle).
+    # Iterating to +/-(n+1) is sufficient: s_y*(n+1) > 1 for all valid n.
     points = []
-    for r in range(-n, n + 1):
-        q_min = max(-n, -n - r)
-        q_max = min(n, n - r)
-        for q in range(q_min, q_max + 1):
-            points.append((s_x * (q + r * 0.5), s_y * r))
+    for r in range(-n - 1, n + 2):
+        for q in range(-n - 1, n + 2):
+            x = s_x * (q + r * 0.5)
+            y = s_y * r
+            if x * x + y * y <= 1.0 + 1e-9:
+                points.append((x, y))
+    if len(points) >= 1000:
+        raise ValueError(
+            "hex_density=%d would generate %d probe points; limit is <1000"
+            % (hex_density, len(points)))
     return points
 
 # Convert distance measurements made on the calibration object to
