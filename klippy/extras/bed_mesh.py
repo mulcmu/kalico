@@ -27,6 +27,16 @@ PROFILE_OPTIONS = {
     "tension": float,
 }
 
+TRIM_PROFILE_VERSION = 1
+TRIM_PROFILE_OPTIONS = {
+    "min_x": float,
+    "max_x": float,
+    "min_y": float,
+    "max_y": float,
+    "x_count": int,
+    "y_count": int,
+}
+
 
 class BedMeshError(Exception):
     pass
@@ -124,6 +134,7 @@ class BedMesh:
         self.last_position = [0.0, 0.0, 0.0, 0.0]
         self.bmc = BedMeshCalibrate(config, self)
         self.z_mesh = None
+        self.trim_map = None
         self.toolhead = None
         self.horizontal_move_z = config.getfloat("horizontal_move_z", 5.0)
         self.fade_start = config.getfloat("fade_start", 1.0)
@@ -140,6 +151,7 @@ class BedMesh:
         # setup persistent storage
         self.pmgr = ProfileManager(config, self)
         self.save_profile = self.pmgr.save_profile
+        self.tmgr = TrimMapManager(config, self)
         self.default_mesh_name = config.get("bed_mesh_default", None)
         if self.default_mesh_name:
             if self.default_mesh_name in self.pmgr.get_profiles():
@@ -222,11 +234,17 @@ class BedMesh:
             self.fade_target = 0.0
         self.tool_offset = 0.0
         self.z_mesh = mesh
-        self.splitter.initialize(mesh, self.fade_target)
+        self.splitter.initialize(mesh, self.fade_target, self.trim_map)
         # cache the current position before a transform takes place
         gcode_move = self.printer.lookup_object("gcode_move")
         gcode_move.reset_last_position()
         self.update_status()
+
+    def set_trim_map(self, trim_map):
+        self.trim_map = trim_map
+        self.splitter.initialize(self.z_mesh, self.fade_target, self.trim_map)
+        gcode_move = self.printer.lookup_object("gcode_move")
+        gcode_move.reset_last_position()
 
     def get_z_factor(self, z_pos):
         z_pos += self.tool_offset
@@ -243,6 +261,10 @@ class BedMesh:
             # No mesh calibrated, so send toolhead position
             self.last_position[:] = self.toolhead.get_position()
             self.last_position[2] -= self.fade_target
+            if self.trim_map is not None:
+                x, y = self.last_position[0], self.last_position[1]
+                self.last_position[0] = x - self.trim_map.calc_dx(x, y)
+                self.last_position[1] = y - self.trim_map.calc_dy(x, y)
         else:
             # return current position minus the current z-adjustment
             x, y, z, e = self.toolhead.get_position()
@@ -263,6 +285,9 @@ class BedMesh:
                 factor = constrain(factor, 0.0, 1.0)
             final_z_adj = factor * z_adj + self.fade_target
             self.last_position[:] = [x, y, z - final_z_adj, e]
+            if self.trim_map is not None:
+                self.last_position[0] = x - self.trim_map.calc_dx(x, y)
+                self.last_position[1] = y - self.trim_map.calc_dy(x, y)
         return list(self.last_position)
 
     def move(self, newpos, speed):
@@ -270,6 +295,11 @@ class BedMesh:
         if self.z_mesh is None or not factor:
             # No mesh calibrated, or mesh leveling phased out.
             x, y, z, e = newpos
+            if self.trim_map is not None:
+                dx = self.trim_map.calc_dx(x, y)
+                dy = self.trim_map.calc_dy(x, y)
+                x = x + dx
+                y = y + dy
             if self.log_fade_complete:
                 self.log_fade_complete = False
                 logging.info(
@@ -1187,12 +1217,14 @@ class MoveSplitter:
             "move_check_distance", 5.0, minval=3.0
         )
         self.z_mesh = None
+        self.trim_map = None
         self.fade_offset = 0.0
         self.gcode = gcode
 
-    def initialize(self, mesh, fade_offset):
+    def initialize(self, mesh, fade_offset, trim_map=None):
         self.z_mesh = mesh
         self.fade_offset = fade_offset
+        self.trim_map = trim_map
 
     def build_move(self, prev_pos, next_pos, factor):
         self.prev_pos = tuple(prev_pos)
@@ -1210,6 +1242,13 @@ class MoveSplitter:
         z = self.z_mesh.calc_z(pos[0], pos[1])
         offset = self.fade_offset
         return self.z_factor * (z - offset) + offset
+
+    def _apply_trim(self, x, y, z, e):
+        if self.trim_map is not None:
+            dx = self.trim_map.calc_dx(x, y)
+            dy = self.trim_map.calc_dy(x, y)
+            return (x + dx, y + dy, z, e)
+        return (x, y, z, e)
 
     def _set_next_move(self, distance_from_prev):
         t = distance_from_prev / self.total_move_length
@@ -1237,7 +1276,7 @@ class MoveSplitter:
                     next_z = self._calc_z_offset(self.current_pos)
                     if abs(next_z - self.z_offset) >= self.split_delta_z:
                         self.z_offset = next_z
-                        return (
+                        return self._apply_trim(
                             self.current_pos[0],
                             self.current_pos[1],
                             self.current_pos[2] + self.z_offset,
@@ -1250,7 +1289,12 @@ class MoveSplitter:
             # used again.
             self.current_pos[2] += self.z_offset
             self.traverse_complete = True
-            return self.current_pos
+            return self._apply_trim(
+                self.current_pos[0],
+                self.current_pos[1],
+                self.current_pos[2],
+                self.current_pos[3],
+            )
         else:
             # Traverse complete
             return None
@@ -1604,6 +1648,85 @@ class ZMesh:
         return a + b + c + d
 
 
+class TrimMap:
+    """XY displacement correction field loaded from a [trim_map NAME] section.
+
+    Stores two regular-grid bilinear fields:
+      dx_matrix[y_idx][x_idx]  -- X displacement correction in mm
+      dy_matrix[y_idx][x_idx]  -- Y displacement correction in mm
+
+    Corrections are added to the commanded gcode position so that the
+    toolhead moves to the physically correct target position.
+    get_position() applies a single Newton-step inverse to recover gcode
+    coordinates from toolhead coordinates.
+    """
+
+    def __init__(self, params, name):
+        self.profile_name = name
+        self.params = params
+        self.x_min = params["min_x"]
+        self.x_max = params["max_x"]
+        self.y_min = params["min_y"]
+        self.y_max = params["max_y"]
+        self.x_count = params["x_count"]
+        self.y_count = params["y_count"]
+        self.x_dist = (self.x_max - self.x_min) / (self.x_count - 1)
+        self.y_dist = (self.y_max - self.y_min) / (self.y_count - 1)
+        self.dx_matrix = None
+        self.dy_matrix = None
+
+    def build_trim(self, dx_matrix, dy_matrix):
+        if (
+            len(dx_matrix) != self.y_count
+            or len(dy_matrix) != self.y_count
+            or len(dx_matrix[0]) != self.x_count
+            or len(dy_matrix[0]) != self.x_count
+        ):
+            raise BedMeshError(
+                "trim_map: matrix dimensions do not match "
+                "x_count=%d y_count=%d" % (self.x_count, self.y_count)
+            )
+        self.dx_matrix = dx_matrix
+        self.dy_matrix = dy_matrix
+
+    def _get_linear_index(self, coord, axis):
+        if axis == 0:
+            mn = self.x_min
+            cnt = self.x_count
+            dist = self.x_dist
+        else:
+            mn = self.y_min
+            cnt = self.y_count
+            dist = self.y_dist
+        idx = int(math.floor((coord - mn) / dist))
+        idx = constrain(idx, 0, cnt - 2)
+        t = (coord - (mn + idx * dist)) / dist
+        return constrain(t, 0.0, 1.0), idx
+
+    def calc_dx(self, x, y):
+        if self.dx_matrix is None:
+            return 0.0
+        tx, xi = self._get_linear_index(x, 0)
+        ty, yi = self._get_linear_index(y, 1)
+        tbl = self.dx_matrix
+        d0 = lerp(tx, tbl[yi][xi], tbl[yi][xi + 1])
+        d1 = lerp(tx, tbl[yi + 1][xi], tbl[yi + 1][xi + 1])
+        return lerp(ty, d0, d1)
+
+    def calc_dy(self, x, y):
+        if self.dy_matrix is None:
+            return 0.0
+        tx, xi = self._get_linear_index(x, 0)
+        ty, yi = self._get_linear_index(y, 1)
+        tbl = self.dy_matrix
+        d0 = lerp(tx, tbl[yi][xi], tbl[yi][xi + 1])
+        d1 = lerp(tx, tbl[yi + 1][xi], tbl[yi + 1][xi + 1])
+        return lerp(ty, d0, d1)
+
+    def get_profile_name(self):
+        return self.profile_name
+
+
 class ProfileManager:
     def __init__(self, config, bedmesh):
         self.name = config.get_name()
@@ -1757,6 +1880,128 @@ class ProfileManager:
                     options[key](name)
                 return
         gcmd.respond_info("Invalid syntax '%s'" % (gcmd.get_commandline(),))
+
+
+class TrimMapManager:
+    """Persistent storage manager for [trim_map NAME] XY correction profiles.
+
+    Config section format:
+        [trim_map <name>]
+        version: 1
+        min_x: <float>   max_x: <float>
+        min_y: <float>   max_y: <float>
+        x_count: <int>   y_count: <int>
+        x_points:        # dx grid  (row=y low→high, col=x low→high)
+          v00, v01, ...
+          ...
+        y_points:        # dy grid  (same layout)
+          v00, v01, ...
+          ...
+
+    G-code commands:
+        TRIM_MAP_PROFILE LOAD=<name>   -- activate a stored trim map
+        TRIM_MAP_PROFILE CLEAR=1       -- deactivate current trim map
+    """
+
+    def __init__(self, config, bedmesh):
+        self.printer = config.get_printer()
+        self.gcode = self.printer.lookup_object("gcode")
+        self.bedmesh = bedmesh
+        self.profiles = {}
+        # Load all [trim_map <name>] sections from the printer config
+        stored = config.get_prefix_sections("trim_map")
+        for profile in stored:
+            parts = profile.get_name().split(" ", 1)
+            if len(parts) < 2:
+                continue
+            name = parts[1]
+            version = profile.getint("version", 0)
+            if version != TRIM_PROFILE_VERSION:
+                logging.info(
+                    "trim_map: Profile [%s] not compatible with this "
+                    "version.  Profile Version: %d  Current Version: %d"
+                    % (name, version, TRIM_PROFILE_VERSION)
+                )
+                continue
+            params = collections.OrderedDict()
+            for key, t in TRIM_PROFILE_OPTIONS.items():
+                if t is int:
+                    params[key] = profile.getint(key)
+                elif t is float:
+                    params[key] = profile.getfloat(key)
+            try:
+                dx_vals = profile.getlists(
+                    "x_points", seps=(",", "\n"), parser=float
+                )
+                dy_vals = profile.getlists(
+                    "y_points", seps=(",", "\n"), parser=float
+                )
+            except Exception as e:
+                logging.warning(
+                    "trim_map: Failed to parse profile [%s]: %s" % (name, e)
+                )
+                continue
+            self.profiles[name] = {
+                "params": params,
+                "dx": dx_vals,
+                "dy": dy_vals,
+            }
+            logging.info("trim_map: Loaded profile [%s]" % name)
+        # Register G-code command
+        self.gcode.register_command(
+            "TRIM_MAP_PROFILE",
+            self.cmd_TRIM_MAP_PROFILE,
+            desc=self.cmd_TRIM_MAP_PROFILE_help,
+        )
+
+    def load_profile(self, name):
+        profile = self.profiles.get(name)
+        if profile is None:
+            raise self.gcode.error(
+                "trim_map: Unknown profile [%s]" % name
+            )
+        trim_map = TrimMap(profile["params"], name)
+        try:
+            trim_map.build_trim(profile["dx"], profile["dy"])
+        except BedMeshError as e:
+            raise self.gcode.error(str(e))
+        self.bedmesh.set_trim_map(trim_map)
+        self.gcode.respond_info(
+            "Trim map [%s] loaded.\n"
+            "Use SAVE_CONFIG to persist across restarts." % name
+        )
+
+    def clear_trim_map(self):
+        self.bedmesh.set_trim_map(None)
+        self.gcode.respond_info("Trim map cleared.")
+
+    cmd_TRIM_MAP_PROFILE_help = "Load or clear an XY trim map correction profile"
+
+    def cmd_TRIM_MAP_PROFILE(self, gcmd):
+        load = gcmd.get("LOAD", None)
+        if load is not None:
+            if not load.strip():
+                raise gcmd.error(
+                    "Value for parameter 'LOAD' must be specified"
+                )
+            self.load_profile(load)
+            return
+        clear = gcmd.get("CLEAR", None)
+        if clear is not None:
+            self.clear_trim_map()
+            return
+        profs = (
+            ", ".join(sorted(self.profiles))
+            if self.profiles
+            else "(none)"
+        )
+        gcmd.respond_info(
+            "Invalid syntax '%s'\n"
+            "Usage:\n"
+            "  TRIM_MAP_PROFILE LOAD=<name>\n"
+            "  TRIM_MAP_PROFILE CLEAR=1\n"
+            "Available profiles: %s" % (gcmd.get_commandline(), profs)
+        )
 
 
 def load_config(config):
