@@ -263,8 +263,16 @@ class BedMesh:
             self.last_position[2] -= self.fade_target
             if self.trim_map is not None:
                 x, y = self.last_position[0], self.last_position[1]
-                self.last_position[0] = x - self.trim_map.calc_dx(x, y)
-                self.last_position[1] = y - self.trim_map.calc_dy(x, y)
+                dx = self.trim_map.calc_dx(x, y)
+                dy = self.trim_map.calc_dy(x, y)
+                self.last_position[0] = x - dx
+                self.last_position[1] = y - dy
+                logging.info(
+                    "trim_map [%s] get_position (no mesh): "
+                    "toolhead=(%.3f, %.3f) gcode=(%.3f, %.3f) "
+                    "delta=(%.4f, %.4f)",
+                    self.trim_map.get_profile_name(), x, y,
+                    self.last_position[0], self.last_position[1], dx, dy)
         else:
             # return current position minus the current z-adjustment
             x, y, z, e = self.toolhead.get_position()
@@ -286,8 +294,16 @@ class BedMesh:
             final_z_adj = factor * z_adj + self.fade_target
             self.last_position[:] = [x, y, z - final_z_adj, e]
             if self.trim_map is not None:
-                self.last_position[0] = x - self.trim_map.calc_dx(x, y)
-                self.last_position[1] = y - self.trim_map.calc_dy(x, y)
+                dx = self.trim_map.calc_dx(x, y)
+                dy = self.trim_map.calc_dy(x, y)
+                self.last_position[0] = x - dx
+                self.last_position[1] = y - dy
+                logging.info(
+                    "trim_map [%s] get_position (with mesh): "
+                    "toolhead=(%.3f, %.3f) gcode=(%.3f, %.3f) "
+                    "delta=(%.4f, %.4f)",
+                    self.trim_map.get_profile_name(), x, y,
+                    self.last_position[0], self.last_position[1], dx, dy)
         return list(self.last_position)
 
     def move(self, newpos, speed):
@@ -1726,6 +1742,22 @@ class TrimMap:
     def get_profile_name(self):
         return self.profile_name
 
+    def get_correction_stats(self):
+        """Return (min_mag, max_mag, rms_mag, mean_dx, mean_dy) over all
+        grid points.  mag = sqrt(dx**2 + dy**2)."""
+        mags = []
+        sum_dx = sum_dy = 0.0
+        for row_dx, row_dy in zip(self.dx_matrix, self.dy_matrix):
+            for dx, dy in zip(row_dx, row_dy):
+                mags.append(math.sqrt(dx * dx + dy * dy))
+                sum_dx += dx
+                sum_dy += dy
+        n = len(mags)
+        if n == 0:
+            return 0., 0., 0., 0., 0.
+        rms_mag = math.sqrt(sum(m * m for m in mags) / n)
+        return min(mags), max(mags), rms_mag, sum_dx / n, sum_dy / n
+
 
 class ProfileManager:
     def __init__(self, config, bedmesh):
@@ -1829,6 +1861,15 @@ class ProfileManager:
             raise self.gcode.error("bed_mesh: Unknown profile [%s]" % prof_name)
         probed_matrix = profile["points"]
         mesh_params = profile["mesh_params"]
+        expected_rows = mesh_params.get("y_count", 0)
+        expected_cols = mesh_params.get("x_count", 0)
+        if (len(probed_matrix) != expected_rows
+                or any(len(row) != expected_cols for row in probed_matrix)):
+            raise self.gcode.error(
+                "bed_mesh: Profile [%s] has invalid or empty points data "
+                "(expected %d x %d matrix). Re-run bed leveling to "
+                "regenerate this profile." % (prof_name, expected_rows,
+                                              expected_cols))
         z_mesh = ZMesh(mesh_params, prof_name)
         try:
             z_mesh.build_mesh(probed_matrix)
@@ -1975,6 +2016,51 @@ class TrimMapManager:
         self.bedmesh.set_trim_map(None)
         self.gcode.respond_info("Trim map cleared.")
 
+    def _report_status(self, gcmd):
+        trim_map = self.bedmesh.trim_map
+        profs = ", ".join(sorted(self.profiles)) if self.profiles else "(none)"
+        if trim_map is None:
+            gcmd.respond_info(
+                "No trim map currently loaded.\n"
+                "Available profiles: %s" % profs
+            )
+            return
+        name = trim_map.get_profile_name()
+        p = trim_map.params
+        mn, mx, rms, mean_dx, mean_dy = trim_map.get_correction_stats()
+        # Report current-position correction if toolhead is ready
+        cur_info = ""
+        toolhead = self.printer.lookup_object("toolhead", None)
+        if toolhead is not None:
+            try:
+                pos = toolhead.get_position()
+                cx, cy = pos[0], pos[1]
+                cdx = trim_map.calc_dx(cx, cy)
+                cdy = trim_map.calc_dy(cx, cy)
+                cur_info = (
+                    "\nCurrent position (%.2f, %.2f): "
+                    "dx=%.4f mm  dy=%.4f mm  |d|=%.4f mm"
+                    % (cx, cy, cdx, cdy,
+                       math.sqrt(cdx * cdx + cdy * cdy)))
+            except Exception:
+                pass
+        gcmd.respond_info(
+            "Active trim map: [%s]\n"
+            "Grid: %d x %d  X=[%.1f, %.1f]  Y=[%.1f, %.1f]\n"
+            "Correction stats (grid points):\n"
+            "  min |d| = %.4f mm\n"
+            "  max |d| = %.4f mm\n"
+            "  RMS |d| = %.4f mm\n"
+            "  mean dx = %.4f mm   mean dy = %.4f mm"
+            "%s\n"
+            "Available profiles: %s"
+            % (name,
+               p["x_count"], p["y_count"],
+               p["min_x"], p["max_x"], p["min_y"], p["max_y"],
+               mn, mx, rms, mean_dx, mean_dy,
+               cur_info, profs)
+        )
+
     cmd_TRIM_MAP_PROFILE_help = "Load or clear an XY trim map correction profile"
 
     def cmd_TRIM_MAP_PROFILE(self, gcmd):
@@ -1990,6 +2076,10 @@ class TrimMapManager:
         if clear is not None:
             self.clear_trim_map()
             return
+        status = gcmd.get("STATUS", None)
+        if status is not None:
+            self._report_status(gcmd)
+            return
         profs = (
             ", ".join(sorted(self.profiles))
             if self.profiles
@@ -2000,6 +2090,7 @@ class TrimMapManager:
             "Usage:\n"
             "  TRIM_MAP_PROFILE LOAD=<name>\n"
             "  TRIM_MAP_PROFILE CLEAR=1\n"
+            "  TRIM_MAP_PROFILE STATUS=1\n"
             "Available profiles: %s" % (gcmd.get_commandline(), profs)
         )
 
