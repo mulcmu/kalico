@@ -637,6 +637,11 @@ class LoadCell:
             {"normal": 1.0, "inverted": -1.0},
             default="normal",
         )
+        self._use_absolute_deviation: bool = config.getchoice(
+            "channel_aggregation",
+            {"signed_sum": False, "absolute_deviation": True},
+            default="signed_sum",
+        )
         LoadCellCommandHelper(config, self)
         # Client support:
         self.clients = ApiClientHelper(printer)
@@ -675,7 +680,7 @@ class LoadCell:
             sum_counts = sum(channel_counts)
             sample = [
                 row[0],
-                self.counts_to_grams(sum_counts),
+                self._aggregate_channel_force(channel_counts),
                 sum_counts,
                 self.tare_counts,
             ]
@@ -767,6 +772,23 @@ class LoadCell:
         )
         sample_delta: float = float(counts - ref_counts)
         return self.invert * (sample_delta / self.counts_per_gram)
+
+    # Aggregate per-channel counts into a single force value (grams).
+    # In signed_sum mode this matches counts_to_grams(sum(channel_counts)).
+    # In absolute_deviation mode the tare-corrected counts are summed by
+    # absolute value, preventing opposing-polarity channels from canceling.
+    def _aggregate_channel_force(
+        self, channel_counts: tuple[int, ...]
+    ) -> float | None:
+        if not (self.is_calibrated() and self.is_tared()):
+            return None
+        if not self._use_absolute_deviation:
+            return self.counts_to_grams(sum(channel_counts))
+        abs_sum = sum(
+            abs(ch - tare)
+            for ch, tare in zip(channel_counts, self.tare_counts_per_channel)
+        )
+        return self.invert * abs_sum / self.counts_per_gram
 
     # The maximum range of a single ADC channel, based on its bit width
     def channel_saturation_range(self):
